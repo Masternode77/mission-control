@@ -181,6 +181,27 @@ const migrations: Migration[] = [
         console.log('[Migration 006] Added planning_dispatch_error to tasks');
       }
     }
+  },
+  {
+    id: '007',
+    name: 'add_agent_source_and_gateway_id',
+    up: (db) => {
+      console.log('[Migration 007] Adding source and gateway_agent_id to agents...');
+
+      const agentsInfo = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
+
+      // Add source column: 'local' for MC-created, 'gateway' for imported from OpenClaw Gateway
+      if (!agentsInfo.some(col => col.name === 'source')) {
+        db.exec(`ALTER TABLE agents ADD COLUMN source TEXT DEFAULT 'local'`);
+        console.log('[Migration 007] Added source to agents');
+      }
+
+      // Add gateway_agent_id column: stores the original agent ID/name from the Gateway
+      if (!agentsInfo.some(col => col.name === 'gateway_agent_id')) {
+        db.exec(`ALTER TABLE agents ADD COLUMN gateway_agent_id TEXT`);
+        console.log('[Migration 007] Added gateway_agent_id to agents');
+      }
+    }
   }
 ];
 

@@ -20,6 +20,8 @@ export type EventType =
   | 'agent_joined'
   | 'system';
 
+export type AgentSource = 'local' | 'gateway';
+
 export interface Agent {
   id: string;
   name: string;
@@ -33,8 +35,22 @@ export interface Agent {
   user_md?: string;
   agents_md?: string;
   model?: string;
+  source: AgentSource;
+  gateway_agent_id?: string;
   created_at: string;
   updated_at: string;
+}
+
+// Agent discovered from the OpenClaw Gateway (not yet imported)
+export interface DiscoveredAgent {
+  id: string;
+  name: string;
+  label?: string;
+  model?: string;
+  channel?: string;
+  status?: string;
+  already_imported: boolean;
+  existing_agent_id?: string;
 }
 
 export interface Task {

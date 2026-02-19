@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS agents (
   user_md TEXT,
   agents_md TEXT,
   model TEXT,
+  source TEXT DEFAULT 'local',
+  gateway_agent_id TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );

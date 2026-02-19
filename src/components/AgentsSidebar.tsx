@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, ChevronRight, ChevronLeft, Zap, ZapOff, Loader2 } from 'lucide-react';
+import { Plus, ChevronRight, ChevronLeft, Zap, ZapOff, Loader2, Search } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import type { Agent, AgentStatus, OpenClawSession } from '@/lib/types';
 import { AgentModal } from './AgentModal';
+import { DiscoverAgentsModal } from './DiscoverAgentsModal';
 
 type FilterTab = 'all' | 'working' | 'standby';
 
@@ -17,6 +18,7 @@ export function AgentsSidebar({ workspaceId }: AgentsSidebarProps) {
   const [filter, setFilter] = useState<FilterTab>('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
+  const [showDiscoverModal, setShowDiscoverModal] = useState(false);
   const [connectingAgentId, setConnectingAgentId] = useState<string | null>(null);
   const [activeSubAgents, setActiveSubAgents] = useState(0);
   const [isMinimized, setIsMinimized] = useState(false);
@@ -249,8 +251,13 @@ export function AgentsSidebar({ workspaceId }: AgentsSidebarProps) {
                       <span className="text-xs text-mc-accent-yellow">★</span>
                     )}
                   </div>
-                  <div className="text-xs text-mc-text-secondary truncate">
+                  <div className="text-xs text-mc-text-secondary truncate flex items-center gap-1">
                     {agent.role}
+                    {agent.source === 'gateway' && (
+                      <span className="text-[10px] px-1 py-0 bg-blue-500/20 text-blue-400 rounded" title="Imported from Gateway">
+                        GW
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -300,15 +307,22 @@ export function AgentsSidebar({ workspaceId }: AgentsSidebarProps) {
         })}
       </div>
 
-      {/* Add Agent Button */}
+      {/* Add Agent / Discover Buttons */}
       {!isMinimized && (
-        <div className="p-3 border-t border-mc-border">
+        <div className="p-3 border-t border-mc-border space-y-2">
           <button
             onClick={() => setShowCreateModal(true)}
             className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-mc-bg-tertiary hover:bg-mc-border rounded text-sm text-mc-text-secondary hover:text-mc-text transition-colors"
           >
             <Plus className="w-4 h-4" />
             Add Agent
+          </button>
+          <button
+            onClick={() => setShowDiscoverModal(true)}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded text-sm text-blue-400 hover:text-blue-300 transition-colors"
+          >
+            <Search className="w-4 h-4" />
+            Import from Gateway
           </button>
         </div>
       )}
@@ -321,6 +335,12 @@ export function AgentsSidebar({ workspaceId }: AgentsSidebarProps) {
         <AgentModal
           agent={editingAgent}
           onClose={() => setEditingAgent(null)}
+          workspaceId={workspaceId}
+        />
+      )}
+      {showDiscoverModal && (
+        <DiscoverAgentsModal
+          onClose={() => setShowDiscoverModal(false)}
           workspaceId={workspaceId}
         />
       )}

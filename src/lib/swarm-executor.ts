@@ -449,7 +449,7 @@ export async function executeSwarmRunAsync(params: {
         sessionKey: params.sessionKey,
         message: payload,
         idempotencyKey: `swarm-exec-${params.taskId}-${Date.now()}`,
-        __timeoutMs: 600000,
+        __timeoutMs: 86400000,
       });
     } catch (initialSendError) {
       const reason = initialSendError instanceof Error ? initialSendError.message : String(initialSendError);

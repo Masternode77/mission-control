@@ -133,7 +133,7 @@ export default function SettingsPage() {
                 type="text"
                 value={config.workspaceBasePath}
                 onChange={(e) => handleChange('workspaceBasePath', e.target.value)}
-                placeholder="~/Documents/Shared"
+                placeholder="~/.openclaw/workspace"
                 className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded text-mc-text focus:border-mc-accent focus:outline-none"
               />
               <p className="text-xs text-mc-text-secondary mt-1">
@@ -149,7 +149,7 @@ export default function SettingsPage() {
                 type="text"
                 value={config.projectsPath}
                 onChange={(e) => handleChange('projectsPath', e.target.value)}
-                placeholder="~/Documents/Shared/projects"
+                placeholder="~/.openclaw/workspace/PROJECTS"
                 className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded text-mc-text focus:border-mc-accent focus:outline-none"
               />
               <p className="text-xs text-mc-text-secondary mt-1">

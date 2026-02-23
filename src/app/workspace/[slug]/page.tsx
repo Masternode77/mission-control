@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useEffect, useRef, useState } from 'react';
+import { useParams, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import { Header } from '@/components/Header';
@@ -10,13 +10,16 @@ import { MissionQueue } from '@/components/MissionQueue';
 import { LiveFeed } from '@/components/LiveFeed';
 import { SSEDebugPanel } from '@/components/SSEDebugPanel';
 import { useMissionControl } from '@/lib/store';
-import { useSSE } from '@/hooks/useSSE';
 import { debug } from '@/lib/debug';
-import type { Task, Workspace } from '@/lib/types';
+import { useGlobalSSE } from '@/providers/SSEProvider';
+import { SwarmControlRoom } from '@/components/SwarmControlRoom';
+import type { Workspace } from '@/lib/types';
 
 export default function WorkspacePage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const slug = params.slug as string;
+  const taskIdFromUrl = String(searchParams.get('taskId') || '').trim();
   
   const {
     setAgents,
@@ -28,12 +31,16 @@ export default function WorkspacePage() {
   } = useMissionControl();
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [activeView, setActiveView] = useState<'swarm' | 'queue'>('swarm');
   const [notFound, setNotFound] = useState(false);
+  const { connected, sequence, lastEvent } = useGlobalSSE();
+  const sseDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deepLinkOpenedRef = useRef(false);
 
-  // Connect to SSE for real-time updates
-  useSSE();
+  useEffect(() => {
+    setIsOnline(connected);
+  }, [connected, setIsOnline]);
 
-  // Load workspace data
   useEffect(() => {
     async function loadWorkspace() {
       try {
@@ -57,7 +64,6 @@ export default function WorkspacePage() {
     loadWorkspace();
   }, [slug, setIsLoading]);
 
-  // Load workspace-specific data
   useEffect(() => {
     if (!workspace) return;
     
@@ -67,10 +73,9 @@ export default function WorkspacePage() {
       try {
         debug.api('Loading workspace data...', { workspaceId });
         
-        // Fetch workspace-scoped data
         const [agentsRes, tasksRes, eventsRes] = await Promise.all([
           fetch(`/api/agents?workspace_id=${workspaceId}`),
-          fetch(`/api/tasks?workspace_id=${workspaceId}`),
+          fetch(`/api/swarm/tasks?workspace_id=${workspaceId}`),
           fetch('/api/events'),
         ]);
 
@@ -88,7 +93,6 @@ export default function WorkspacePage() {
       }
     }
 
-    // Check OpenClaw connection separately (non-blocking)
     async function checkOpenClaw() {
       try {
         const controller = new AbortController();
@@ -108,65 +112,49 @@ export default function WorkspacePage() {
 
     loadData();
     checkOpenClaw();
+  }, [workspace, setAgents, setTasks, setEvents, setIsOnline, setIsLoading]);
 
-    // SSE is the primary real-time mechanism - these are fallback polls with longer intervals
-    // to reduce server load while providing redundancy
+  useEffect(() => {
+    if (!workspace || !lastEvent) return;
 
-    // Poll for events every 30 seconds (SSE fallback - increased from 5s)
-    const eventPoll = setInterval(async () => {
+    const shouldRefresh =
+      lastEvent.type === 'task_created' ||
+      lastEvent.type === 'task_updated' ||
+      lastEvent.type === 'task_deleted' ||
+      lastEvent.type === 'event_logged';
+
+    if (!shouldRefresh) return;
+
+    if (sseDebounceRef.current) clearTimeout(sseDebounceRef.current);
+    sseDebounceRef.current = setTimeout(async () => {
       try {
-        const res = await fetch('/api/events?limit=20');
-        if (res.ok) {
-          setEvents(await res.json());
-        }
+        const [tasksRes, eventsRes] = await Promise.all([
+          fetch(`/api/swarm/tasks?workspace_id=${workspace.id}`),
+          fetch('/api/events?limit=20'),
+        ]);
+        if (tasksRes.ok) setTasks(await tasksRes.json());
+        if (eventsRes.ok) setEvents(await eventsRes.json());
       } catch (error) {
-        console.error('Failed to poll events:', error);
+        console.error('Failed to refresh workspace data from SSE:', error);
       }
-    }, 30000); // Increased from 5000 to 30000
-
-    // Poll tasks as SSE fallback every 60 seconds (increased from 10s)
-    const taskPoll = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/tasks?workspace_id=${workspaceId}`);
-        if (res.ok) {
-          const newTasks: Task[] = await res.json();
-          const currentTasks = useMissionControl.getState().tasks;
-
-          const hasChanges = newTasks.length !== currentTasks.length ||
-            newTasks.some((t) => {
-              const current = currentTasks.find(ct => ct.id === t.id);
-              return !current || current.status !== t.status;
-            });
-
-          if (hasChanges) {
-            debug.api('[FALLBACK] Task changes detected via polling, updating store');
-            setTasks(newTasks);
-          }
-        }
-      } catch (error) {
-        console.error('Failed to poll tasks:', error);
-      }
-    }, 60000); // Increased from 10000 to 60000
-
-    // Check OpenClaw connection every 30 seconds (kept as-is for monitoring)
-    const connectionCheck = setInterval(async () => {
-      try {
-        const res = await fetch('/api/openclaw/status');
-        if (res.ok) {
-          const status = await res.json();
-          setIsOnline(status.connected);
-        }
-      } catch {
-        setIsOnline(false);
-      }
-    }, 30000);
+    }, 700);
 
     return () => {
-      clearInterval(eventPoll);
-      clearInterval(connectionCheck);
-      clearInterval(taskPoll);
+      if (sseDebounceRef.current) clearTimeout(sseDebounceRef.current);
     };
-  }, [workspace, setAgents, setTasks, setEvents, setIsOnline, setIsLoading]);
+  }, [sequence, lastEvent, workspace, setEvents, setTasks]);
+
+  useEffect(() => {
+    if (!workspace || !taskIdFromUrl || deepLinkOpenedRef.current) return;
+    deepLinkOpenedRef.current = true;
+    setActiveView('queue');
+
+    const t = setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('mc:open-task', { detail: { taskId: taskIdFromUrl } }));
+    }, 350);
+
+    return () => clearTimeout(t);
+  }, [workspace, taskIdFromUrl]);
 
   if (notFound) {
     return (
@@ -205,17 +193,30 @@ export default function WorkspacePage() {
       <Header workspace={workspace} />
 
       <div className="flex-1 flex overflow-hidden">
-        {/* Agents Sidebar */}
         <AgentsSidebar workspaceId={workspace.id} />
 
-        {/* Main Content Area */}
-        <MissionQueue workspaceId={workspace.id} />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="px-4 py-2 border-b border-mc-border bg-mc-bg-secondary flex items-center gap-2">
+            <button
+              onClick={() => setActiveView('swarm')}
+              className={`px-3 py-1.5 rounded text-xs ${activeView === 'swarm' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/50' : 'bg-mc-bg-tertiary text-mc-text-secondary border border-mc-border'}`}
+            >
+              Swarm Topology
+            </button>
+            <button
+              onClick={() => setActiveView('queue')}
+              className={`px-3 py-1.5 rounded text-xs ${activeView === 'queue' ? 'bg-mc-accent/20 text-mc-accent border border-mc-accent/50' : 'bg-mc-bg-tertiary text-mc-text-secondary border border-mc-border'}`}
+            >
+              Queue View
+            </button>
+          </div>
 
-        {/* Live Feed */}
+          {activeView === 'swarm' ? <SwarmControlRoom /> : <MissionQueue workspaceId={workspace.id} />}
+        </div>
+
         <LiveFeed />
       </div>
 
-      {/* Debug Panel - only shows when debug mode enabled */}
       <SSEDebugPanel />
     </div>
   );

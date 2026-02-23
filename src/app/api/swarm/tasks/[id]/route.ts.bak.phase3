@@ -1,0 +1,158 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { broadcast } from '@/lib/events';
+import { queryOne, run } from '@/lib/db';
+import { normalizeSwarmPipelineStatus } from '@/lib/swarm-status';
+
+export const dynamic = 'force-dynamic';
+
+type TaskRow = {
+  task_id: string;
+  title: string;
+  objective: string | null;
+  status: string;
+  priority: string;
+  ws: string;
+  owner_role_id: string | null;
+  owner_display_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+function mapPriority(priority: string): 'low' | 'normal' | 'high' | 'urgent' {
+  const p = (priority || '').toUpperCase();
+  if (p === 'P0' || p === 'URGENT') return 'urgent';
+  if (p === 'P1' || p === 'HIGH') return 'high';
+  if (p === 'P3' || p === 'LOW') return 'low';
+  return 'normal';
+}
+
+function toResponse(row: TaskRow) {
+  return {
+    id: row.task_id,
+    title: row.title,
+    description: row.objective || undefined,
+    status: normalizeSwarmPipelineStatus(row.status),
+    swarm_status: row.status,
+    priority: mapPriority(row.priority),
+    ws: row.ws,
+    workspace_id: row.ws,
+    owner_role_id: row.owner_role_id || 'MC-MAIN',
+    assigned_agent: row.owner_role_id
+      ? {
+          id: row.owner_role_id,
+          name: row.owner_display_name || row.owner_role_id,
+          avatar_emoji: '🧠',
+        }
+      : undefined,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+
+function failRunsForTerminalTask(taskId: string, now: string) {
+  run(
+    `UPDATE swarm_runs
+     SET run_status = CASE WHEN run_status = 'completed' THEN 'completed' ELSE 'failed' END,
+         ended_at = COALESCE(ended_at, ?),
+         error_message = CASE
+           WHEN run_status = 'completed' THEN error_message
+           WHEN error_message IS NULL OR error_message = '' THEN 'Parent task moved to terminal state'
+           ELSE error_message
+         END
+     WHERE task_id = ?`,
+    [now, taskId]
+  );
+}
+
+function finalizeRunsForCompletedTask(taskId: string, now: string) {
+  run(
+    `UPDATE swarm_runs
+     SET run_status = 'completed',
+         ended_at = COALESCE(ended_at, ?),
+         error_message = CASE WHEN error_message = 'retry superseded' THEN NULL ELSE error_message END
+     WHERE task_id = ? AND run_status != 'completed'`,
+    [now, taskId]
+  );
+}
+
+export async function GET(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await params;
+    const row = queryOne<TaskRow>(
+      `SELECT st.task_id, st.title, st.objective, st.status, st.priority, st.ws, st.owner_role_id,
+              ar.display_name AS owner_display_name, st.created_at, st.updated_at
+       FROM swarm_tasks st
+       LEFT JOIN agent_roles ar ON ar.role_id = st.owner_role_id
+       WHERE st.task_id = ?`,
+      [id]
+    );
+
+    if (!row) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    return NextResponse.json(toResponse(row));
+  } catch (error) {
+    console.error('Failed to get swarm task:', error);
+    return NextResponse.json({ error: 'Failed to get swarm task' }, { status: 500 });
+  }
+}
+
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await params;
+    const body = await request.json();
+    const rawStatus = String(body.status || 'intake').toLowerCase();
+    const nextStatus = normalizeSwarmPipelineStatus(body.status || 'intake');
+    const now = new Date().toISOString();
+
+    const title = typeof body.title === 'string' ? body.title.trim() : undefined;
+    const objective = typeof body.description === 'string' ? body.description : (typeof body.objective === 'string' ? body.objective : undefined);
+    const ownerRoleId = typeof body.owner_role_id === 'string' ? body.owner_role_id : undefined;
+
+    run(
+      `UPDATE swarm_tasks
+       SET status = ?,
+           title = COALESCE(?, title),
+           objective = COALESCE(?, objective),
+           owner_role_id = COALESCE(?, owner_role_id),
+           updated_at = ?
+       WHERE task_id = ?`,
+      [nextStatus, title ?? null, objective ?? null, ownerRoleId ?? null, now, id]
+    );
+
+    if (nextStatus === 'completed') {
+      finalizeRunsForCompletedTask(id, now);
+    }
+
+    if (rawStatus === 'failed') {
+      failRunsForTerminalTask(id, now);
+    }
+
+    broadcast({ type: 'task_updated', payload: { id, status: nextStatus } as any });
+    broadcast({ type: 'event_logged', payload: { taskId: id, sessionId: id, summary: 'task_status_changed' } });
+
+    return NextResponse.json({ ok: true, task_id: id, status: nextStatus });
+  } catch (error) {
+    console.error('Failed to patch swarm task:', error);
+    return NextResponse.json({ error: 'Failed to patch swarm task' }, { status: 500 });
+  }
+}
+
+export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await params;
+    run('DELETE FROM swarm_handoffs WHERE task_id = ?', [id]);
+    run('DELETE FROM swarm_approvals WHERE task_id = ?', [id]);
+    run('DELETE FROM swarm_runs WHERE task_id = ?', [id]);
+    const result = run('DELETE FROM swarm_tasks WHERE task_id = ?', [id]);
+
+    if (result.changes === 0) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+
+    broadcast({ type: 'task_deleted', payload: { id } });
+    broadcast({ type: 'event_logged', payload: { taskId: id, sessionId: id, summary: 'task_deleted' } });
+
+    return NextResponse.json({ ok: true, id });
+  } catch (error) {
+    console.error('Failed to delete swarm task:', error);
+    return NextResponse.json({ error: 'Failed to delete swarm task' }, { status: 500 });
+  }
+}

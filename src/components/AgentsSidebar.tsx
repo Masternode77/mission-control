@@ -1,349 +1,204 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { Plus, ChevronRight, ChevronLeft, Zap, ZapOff, Loader2, Search } from 'lucide-react';
-import { useMissionControl } from '@/lib/store';
-import type { Agent, AgentStatus, OpenClawSession } from '@/lib/types';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, ChevronLeft, ChevronRight, Plus, Search } from 'lucide-react';
 import { AgentModal } from './AgentModal';
 import { DiscoverAgentsModal } from './DiscoverAgentsModal';
+import { AgentConfigDrawer, type RoleConfigModel } from './AgentConfigDrawer';
+import { useGlobalSSE } from '@/providers/SSEProvider';
 
 type FilterTab = 'all' | 'working' | 'standby';
+
+type SwarmRole = {
+  id: string;
+  role_id: string;
+  display_name: string;
+  domain: string;
+  profile_type: string;
+  system_prompt?: string;
+  version: number;
+  enabled: boolean;
+  running_runs: number;
+  total_runs: number;
+  status: 'working' | 'standby';
+};
 
 interface AgentsSidebarProps {
   workspaceId?: string;
 }
 
 export function AgentsSidebar({ workspaceId }: AgentsSidebarProps) {
-  const { agents, selectedAgent, setSelectedAgent, agentOpenClawSessions, setAgentOpenClawSession } = useMissionControl();
   const [filter, setFilter] = useState<FilterTab>('all');
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
-  const [showDiscoverModal, setShowDiscoverModal] = useState(false);
-  const [connectingAgentId, setConnectingAgentId] = useState<string | null>(null);
-  const [activeSubAgents, setActiveSubAgents] = useState(0);
   const [isMinimized, setIsMinimized] = useState(false);
+  const [roles, setRoles] = useState<SwarmRole[]>([]);
+  const [expandedDomains, setExpandedDomains] = useState<Record<string, boolean>>({});
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showDiscoverModal, setShowDiscoverModal] = useState(false);
+  const [selectedRole, setSelectedRole] = useState<RoleConfigModel | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { sequence, lastEvent } = useGlobalSSE();
 
-  const toggleMinimize = () => setIsMinimized(!isMinimized);
-
-  // Load OpenClaw session status for all agents on mount
-  const loadOpenClawSessions = useCallback(async () => {
-    for (const agent of agents) {
-      try {
-        const res = await fetch(`/api/agents/${agent.id}/openclaw`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.linked && data.session) {
-            setAgentOpenClawSession(agent.id, data.session as OpenClawSession);
-          }
-        }
-      } catch (error) {
-        console.error(`Failed to load OpenClaw session for ${agent.name}:`, error);
-      }
-    }
-  }, [agents, setAgentOpenClawSession]);
-
-  useEffect(() => {
-    if (agents.length > 0) {
-      loadOpenClawSessions();
-    }
-  }, [loadOpenClawSessions, agents.length]);
-
-  // Load active sub-agent count
-  useEffect(() => {
-    const loadSubAgentCount = async () => {
-      try {
-        const res = await fetch('/api/openclaw/sessions?session_type=subagent&status=active');
-        if (res.ok) {
-          const sessions = await res.json();
-          setActiveSubAgents(sessions.length);
-        }
-      } catch (error) {
-        console.error('Failed to load sub-agent count:', error);
-      }
-    };
-
-    loadSubAgentCount();
-
-    // Poll every 30 seconds (reduced from 10s to reduce load)
-    const interval = setInterval(loadSubAgentCount, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const handleConnectToOpenClaw = async (agent: Agent, e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevent selecting the agent
-    setConnectingAgentId(agent.id);
-
+  const loadRoles = useCallback(async () => {
     try {
-      const existingSession = agentOpenClawSessions[agent.id];
-
-      if (existingSession) {
-        // Disconnect
-        const res = await fetch(`/api/agents/${agent.id}/openclaw`, { method: 'DELETE' });
-        if (res.ok) {
-          setAgentOpenClawSession(agent.id, null);
-        }
-      } else {
-        // Connect
-        const res = await fetch(`/api/agents/${agent.id}/openclaw`, { method: 'POST' });
-        if (res.ok) {
-          const data = await res.json();
-          setAgentOpenClawSession(agent.id, data.session as OpenClawSession);
-        } else {
-          const error = await res.json();
-          console.error('Failed to connect to OpenClaw:', error);
-          alert(`Failed to connect: ${error.error || 'Unknown error'}`);
-        }
+      const res = await fetch(`/api/swarm/roles?workspace_id=${workspaceId || 'all'}`);
+      if (res.ok) {
+        const data = (await res.json()) as SwarmRole[];
+        setRoles(data);
+        setExpandedDomains((prev) => {
+          const next = { ...prev };
+          Array.from(new Set(data.map((r) => r.domain || 'SHARED'))).forEach((domain) => {
+            if (!(domain in next)) next[domain] = true;
+          });
+          return next;
+        });
       }
     } catch (error) {
-      console.error('OpenClaw connection error:', error);
-    } finally {
-      setConnectingAgentId(null);
+      console.error('Failed to fetch swarm roles:', error);
     }
-  };
+  }, [workspaceId]);
 
-  const filteredAgents = agents.filter((agent) => {
-    if (filter === 'all') return true;
-    return agent.status === filter;
-  });
-
-  const getStatusBadge = (status: AgentStatus) => {
-    const styles = {
-      standby: 'status-standby',
-      working: 'status-working',
-      offline: 'status-offline',
+  useEffect(() => {
+    void loadRoles();
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-    return styles[status] || styles.standby;
-  };
+  }, [loadRoles]);
+
+  useEffect(() => {
+    if (!lastEvent) return;
+    const summary = lastEvent.type === 'event_logged' ? String((lastEvent.payload as { summary?: string })?.summary || '') : '';
+    const shouldReload =
+      (lastEvent.type === 'event_logged' && /role_config_updated|task_|run_|hitl_|REWORK|EXECUTOR/.test(summary)) ||
+      lastEvent.type === 'agent_spawned' ||
+      lastEvent.type === 'agent_completed' ||
+      lastEvent.type === 'task_updated' ||
+      lastEvent.type === 'task_created' ||
+      lastEvent.type === 'task_deleted';
+
+    if (!shouldReload) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      void loadRoles();
+    }, 700);
+  }, [sequence, lastEvent, loadRoles]);
+
+  const filteredRoles = useMemo(() => roles.filter((r) => (filter === 'all' ? true : r.status === filter)), [roles, filter]);
+
+  const groupedRoles = useMemo(() => {
+    return filteredRoles.reduce<Record<string, SwarmRole[]>>((acc, role) => {
+      const key = role.domain || 'SHARED';
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(role);
+      return acc;
+    }, {});
+  }, [filteredRoles]);
+
+  const toggleDomain = (domain: string) => setExpandedDomains((prev) => ({ ...prev, [domain]: !prev[domain] }));
 
   return (
-    <aside
-      className={`bg-mc-bg-secondary border-r border-mc-border flex flex-col transition-all duration-300 ease-in-out ${
-        isMinimized ? 'w-12' : 'w-64'
-      }`}
-    >
-      {/* Header */}
-      <div className="p-3 border-b border-mc-border">
-        <div className="flex items-center">
-          <button
-            onClick={toggleMinimize}
-            className="p-1 rounded hover:bg-mc-bg-tertiary text-mc-text-secondary hover:text-mc-text transition-colors"
-            aria-label={isMinimized ? 'Expand agents' : 'Minimize agents'}
-          >
-            {isMinimized ? (
-              <ChevronRight className="w-4 h-4" />
-            ) : (
-              <ChevronLeft className="w-4 h-4" />
+    <>
+      <aside className={`bg-mc-bg-secondary border-r border-mc-border flex flex-col transition-all duration-300 ease-in-out ${isMinimized ? 'w-12' : 'w-72'}`}>
+        <div className="p-3 border-b border-mc-border">
+          <div className="flex items-center">
+            <button onClick={() => setIsMinimized((v) => !v)} className="p-1 rounded hover:bg-mc-bg-tertiary text-mc-text-secondary hover:text-mc-text transition-colors" aria-label={isMinimized ? 'Expand agents' : 'Minimize agents'}>
+              {isMinimized ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+            </button>
+            {!isMinimized && (
+              <>
+                <span className="text-sm font-medium uppercase tracking-wider">Swarm Agents</span>
+                <span className="bg-mc-bg-tertiary text-mc-text-secondary text-xs px-2 py-0.5 rounded ml-2">{filteredRoles.length}</span>
+              </>
             )}
-          </button>
+          </div>
+
           {!isMinimized && (
-            <>
-              <span className="text-sm font-medium uppercase tracking-wider">Agents</span>
-              <span className="bg-mc-bg-tertiary text-mc-text-secondary text-xs px-2 py-0.5 rounded ml-2">
-                {agents.length}
-              </span>
-            </>
-          )}
-        </div>
-
-        {!isMinimized && (
-          <>
-            {/* Active Sub-Agents Counter */}
-            {activeSubAgents > 0 && (
-              <div className="mb-3 mt-3 px-3 py-2 bg-green-500/10 border border-green-500/20 rounded-lg">
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-green-400">●</span>
-                  <span className="text-mc-text">Active Sub-Agents:</span>
-                  <span className="font-bold text-green-400">{activeSubAgents}</span>
-                </div>
-              </div>
-            )}
-
-            {/* Filter Tabs */}
-            <div className="flex gap-1">
+            <div className="flex gap-1 mt-3">
               {(['all', 'working', 'standby'] as FilterTab[]).map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setFilter(tab)}
-                  className={`px-3 py-1 text-xs rounded uppercase ${
-                    filter === tab
-                      ? 'bg-mc-accent text-mc-bg font-medium'
-                      : 'text-mc-text-secondary hover:bg-mc-bg-tertiary'
-                  }`}
-                >
+                <button key={tab} onClick={() => setFilter(tab)} className={`px-3 py-1 text-xs rounded uppercase ${filter === tab ? 'bg-mc-accent text-mc-bg font-medium' : 'text-mc-text-secondary hover:bg-mc-bg-tertiary'}`}>
                   {tab}
                 </button>
               ))}
             </div>
-          </>
-        )}
-      </div>
-
-      {/* Agent List */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-1">
-        {filteredAgents.map((agent) => {
-          const openclawSession = agentOpenClawSessions[agent.id];
-
-          if (isMinimized) {
-            // Minimized view - just avatar
-            return (
-              <div key={agent.id} className="flex justify-center py-3">
-                <button
-                  onClick={() => {
-                    setSelectedAgent(agent);
-                    setEditingAgent(agent);
-                  }}
-                  className="relative group"
-                  title={`${agent.name} - ${agent.role}`}
-                >
-                  <span className="text-2xl">{agent.avatar_emoji}</span>
-                  {openclawSession && (
-                    <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-mc-bg-secondary" />
-                  )}
-                  {!!agent.is_master && (
-                    <span className="absolute -top-1 -right-1 text-xs text-mc-accent-yellow">★</span>
-                  )}
-                  {/* Status indicator */}
-                  <span
-                    className={`absolute -bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full ${
-                      agent.status === 'working' ? 'bg-mc-accent-green' :
-                      agent.status === 'standby' ? 'bg-mc-text-secondary' :
-                      'bg-gray-500'
-                    }`}
-                  />
-                  {/* Tooltip */}
-                  <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-mc-bg text-mc-text text-xs rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 border border-mc-border">
-                    {agent.name}
-                  </div>
-                </button>
-              </div>
-            );
-          }
-
-          // Expanded view - full agent card
-          const isConnecting = connectingAgentId === agent.id;
-          return (
-            <div
-              key={agent.id}
-              className={`w-full rounded hover:bg-mc-bg-tertiary transition-colors ${
-                selectedAgent?.id === agent.id ? 'bg-mc-bg-tertiary' : ''
-              }`}
-            >
-              <button
-                onClick={() => {
-                  setSelectedAgent(agent);
-                  setEditingAgent(agent);
-                }}
-                className="w-full flex items-center gap-3 p-2 text-left"
-              >
-                {/* Avatar */}
-                <div className="text-2xl relative">
-                  {agent.avatar_emoji}
-                  {openclawSession && (
-                    <span className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-mc-bg-secondary" />
-                  )}
-                </div>
-
-                {/* Info */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-sm truncate">{agent.name}</span>
-                    {!!agent.is_master && (
-                      <span className="text-xs text-mc-accent-yellow">★</span>
-                    )}
-                  </div>
-                  <div className="text-xs text-mc-text-secondary truncate flex items-center gap-1">
-                    {agent.role}
-                    {agent.source === 'gateway' && (
-                      <span className="text-[10px] px-1 py-0 bg-blue-500/20 text-blue-400 rounded" title="Imported from Gateway">
-                        GW
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Status */}
-                <span
-                  className={`text-xs px-2 py-0.5 rounded uppercase ${getStatusBadge(
-                    agent.status
-                  )}`}
-                >
-                  {agent.status}
-                </span>
-              </button>
-
-              {/* OpenClaw Connect Button - show for master agents */}
-              {!!agent.is_master && (
-                <div className="px-2 pb-2">
-                  <button
-                    onClick={(e) => handleConnectToOpenClaw(agent, e)}
-                    disabled={isConnecting}
-                    className={`w-full flex items-center justify-center gap-2 px-2 py-1 rounded text-xs transition-colors ${
-                      openclawSession
-                        ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
-                        : 'bg-mc-bg text-mc-text-secondary hover:bg-mc-bg-tertiary hover:text-mc-text'
-                    }`}
-                  >
-                    {isConnecting ? (
-                      <>
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                        <span>Connecting...</span>
-                      </>
-                    ) : openclawSession ? (
-                      <>
-                        <Zap className="w-3 h-3" />
-                        <span>OpenClaw Connected</span>
-                      </>
-                    ) : (
-                      <>
-                        <ZapOff className="w-3 h-3" />
-                        <span>Connect to OpenClaw</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Add Agent / Discover Buttons */}
-      {!isMinimized && (
-        <div className="p-3 border-t border-mc-border space-y-2">
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-mc-bg-tertiary hover:bg-mc-border rounded text-sm text-mc-text-secondary hover:text-mc-text transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            Add Agent
-          </button>
-          <button
-            onClick={() => setShowDiscoverModal(true)}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded text-sm text-blue-400 hover:text-blue-300 transition-colors"
-          >
-            <Search className="w-4 h-4" />
-            Import from Gateway
-          </button>
+          )}
         </div>
-      )}
 
-      {/* Modals */}
-      {showCreateModal && (
-        <AgentModal onClose={() => setShowCreateModal(false)} workspaceId={workspaceId} />
-      )}
-      {editingAgent && (
-        <AgentModal
-          agent={editingAgent}
-          onClose={() => setEditingAgent(null)}
-          workspaceId={workspaceId}
-        />
-      )}
-      {showDiscoverModal && (
-        <DiscoverAgentsModal
-          onClose={() => setShowDiscoverModal(false)}
-          workspaceId={workspaceId}
-        />
-      )}
-    </aside>
+        {!isMinimized && (
+          <div className="flex-1 overflow-y-auto p-2 space-y-2">
+            {Object.entries(groupedRoles).map(([domain, domainRoles]) => {
+              const isOpen = expandedDomains[domain] ?? true;
+              const workingCount = domainRoles.filter((r) => r.status === 'working').length;
+
+              return (
+                <div key={domain} className="rounded-lg border border-mc-border/70 overflow-hidden">
+                  <button onClick={() => toggleDomain(domain)} className="w-full px-3 py-2 bg-mc-bg-tertiary/50 flex items-center justify-between text-left">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <ChevronDown className={`w-4 h-4 text-mc-text-secondary transition-transform ${isOpen ? '' : '-rotate-90'}`} />
+                      <span className="text-sm font-medium text-cyan-300 truncate">{domain}</span>
+                    </div>
+                    <div className="text-xs text-mc-text-secondary">{domainRoles.length} · <span className="text-green-400">{workingCount} active</span></div>
+                  </button>
+
+                  {isOpen && (
+                    <div className="p-1.5 space-y-1 bg-mc-bg-secondary/70">
+                      {domainRoles.map((role) => (
+                        <button
+                          key={role.id}
+                          onClick={() =>
+                            setSelectedRole({
+                              role_id: role.role_id,
+                              display_name: role.display_name,
+                              domain: role.domain,
+                              system_prompt: role.system_prompt || '',
+                              version: role.version || 1,
+                            })
+                          }
+                          className="w-full text-left px-2.5 py-2 rounded hover:bg-mc-bg-tertiary transition-colors border border-transparent hover:border-mc-border/60"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-sm font-medium truncate">{role.display_name}</div>
+                            <span className={`text-[10px] px-2 py-0.5 rounded uppercase ${role.status === 'working' ? 'bg-green-500/20 text-green-400' : 'bg-slate-500/20 text-slate-300'}`}>{role.status}</span>
+                          </div>
+                          <div className="text-xs text-mc-text-secondary mt-1">{role.profile_type} · runs {role.running_runs}/{role.total_runs}</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {!isMinimized && (
+          <div className="p-3 border-t border-mc-border space-y-2">
+            <button onClick={() => setShowCreateModal(true)} className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-mc-bg-tertiary hover:bg-mc-border rounded text-sm text-mc-text-secondary hover:text-mc-text transition-colors"><Plus className="w-4 h-4" />Add Agent</button>
+            <button onClick={() => setShowDiscoverModal(true)} className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded text-sm text-blue-400 hover:text-blue-300 transition-colors"><Search className="w-4 h-4" />Import from Gateway</button>
+          </div>
+        )}
+
+        {showCreateModal && <AgentModal onClose={() => setShowCreateModal(false)} workspaceId={workspaceId} />}
+        {showDiscoverModal && <DiscoverAgentsModal onClose={() => setShowDiscoverModal(false)} workspaceId={workspaceId} />}
+      </aside>
+
+      <AgentConfigDrawer
+        role={selectedRole}
+        onClose={() => setSelectedRole(null)}
+        onSaved={(updated) => {
+          setRoles((prev) =>
+            prev.map((r) =>
+              r.role_id === updated.role_id
+                ? {
+                    ...r,
+                    display_name: updated.display_name,
+                    domain: updated.domain,
+                    system_prompt: updated.system_prompt,
+                    version: updated.version,
+                  }
+                : r
+            )
+          );
+        }}
+      />
+    </>
   );
 }

@@ -1,0 +1,178 @@
+2026-02-21 01:38:34: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 02:35:21: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 02:42:01: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 02:53:11: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 02:58:17: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 03:03:21: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 17:33:25: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 17:50:40: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 18:27:58: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 19:02:32: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 19:03:09: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 20:04:16: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 20:12:58: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 20:12:58: Failed to simulate completion: SqliteError: FOREIGN KEY constraint failed
+2026-02-21 20:12:58:     at A (/Users/josh/.openclaw/workspace/mission-control/.next/server/chunks/8890.js:402:606)
+2026-02-21 20:12:58:     at c (/Users/josh/.openclaw/workspace/mission-control/.next/server/app/api/swarm/tasks/[id]/simulate-complete/route.js:2:106)
+2026-02-21 20:12:58:     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+2026-02-21 20:12:58:     at async /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:38411
+2026-02-21 20:12:58:     at async e_.execute (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:27880)
+2026-02-21 20:12:58:     at async e_.handle (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:39745)
+2026-02-21 20:12:58:     at async doRender (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/base-server.js:1353:42)
+2026-02-21 20:12:58:     at async cacheEntry.responseCache.get.routeKind (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/base-server.js:1575:28) {
+2026-02-21 20:12:58:   code: 'SQLITE_CONSTRAINT_FOREIGNKEY'
+2026-02-21 20:12:58: }
+2026-02-21 20:13:26: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 20:21:46: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 20:27:34: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 20:31:12: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 20:35:18: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 20:41:46: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 21:12:56: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 21:19:38: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 21:26:49: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-21 21:32:46: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 00:19:18: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 00:44:15: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 00:47:25: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 01:02:38: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 01:15:32: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 01:28:29: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 01:39:18: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 01:39:23: Failed to orchestrate task: SqliteError: FOREIGN KEY constraint failed
+2026-02-22 01:39:23:     at A (/Users/josh/.openclaw/workspace/mission-control/.next/server/chunks/8890.js:404:606)
+2026-02-22 01:39:23:     at _ (/Users/josh/.openclaw/workspace/mission-control/.next/server/app/api/swarm/tasks/[id]/orchestrate/route.js:1:1177)
+2026-02-22 01:39:23:     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+2026-02-22 01:39:23:     at async /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:38411
+2026-02-22 01:39:23:     at async e_.execute (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:27880)
+2026-02-22 01:39:23:     at async e_.handle (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:39745)
+2026-02-22 01:39:23:     at async doRender (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/base-server.js:1353:42)
+2026-02-22 01:39:23:     at async cacheEntry.responseCache.get.routeKind (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/base-server.js:1575:28) {
+2026-02-22 01:39:23:   code: 'SQLITE_CONSTRAINT_FOREIGNKEY'
+2026-02-22 01:39:23: }
+2026-02-22 01:40:25: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 01:40:25: Failed to orchestrate task: SqliteError: FOREIGN KEY constraint failed
+2026-02-22 01:40:25:     at A (/Users/josh/.openclaw/workspace/mission-control/.next/server/chunks/8890.js:404:606)
+2026-02-22 01:40:25:     at p (/Users/josh/.openclaw/workspace/mission-control/.next/server/app/api/swarm/tasks/[id]/orchestrate/route.js:1:1177)
+2026-02-22 01:40:25:     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+2026-02-22 01:40:25:     at async /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:38411
+2026-02-22 01:40:25:     at async e_.execute (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:27880)
+2026-02-22 01:40:25:     at async e_.handle (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:39745)
+2026-02-22 01:40:25:     at async doRender (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/base-server.js:1353:42)
+2026-02-22 01:40:25:     at async cacheEntry.responseCache.get.routeKind (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/base-server.js:1575:28) {
+2026-02-22 01:40:25:   code: 'SQLITE_CONSTRAINT_FOREIGNKEY'
+2026-02-22 01:40:25: }
+2026-02-22 01:41:50: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 01:47:23: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 01:50:02: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 01:52:53: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 02:04:12: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 02:24:52: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 02:43:55: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 02:52:00: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 03:08:22: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 03:37:45: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 03:58:37: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 04:00:58: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 11:09:00: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 12:02:49: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 12:07:11: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 14:19:15: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 14:32:13: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 16:05:19: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 16:05:57: Failed to fetch swarm queue tasks: SqliteError: near "exists": syntax error
+2026-02-22 16:05:57:     at Database.prepare (/Users/josh/.openclaw/workspace/mission-control/node_modules/better-sqlite3/lib/methods/wrappers.js:5:21)
+2026-02-22 16:05:57:     at L (/Users/josh/.openclaw/workspace/mission-control/.next/server/chunks/8890.js:404:544)
+2026-02-22 16:05:57:     at w (/Users/josh/.openclaw/workspace/mission-control/.next/server/app/api/swarm/tasks/route.js:1:1000)
+2026-02-22 16:05:57:     at /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:38417
+2026-02-22 16:05:57:     at /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/lib/trace/tracer.js:140:36
+2026-02-22 16:05:57:     at NoopContextManager.with (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:7062)
+2026-02-22 16:05:57:     at ContextAPI.with (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:518)
+2026-02-22 16:05:57:     at NoopTracer.startActiveSpan (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:18093)
+2026-02-22 16:05:57:     at ProxyTracer.startActiveSpan (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:18854)
+2026-02-22 16:05:57:     at /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/lib/trace/tracer.js:122:103 {
+2026-02-22 16:05:57:   code: 'SQLITE_ERROR'
+2026-02-22 16:05:57: }
+2026-02-22 16:05:57: [telegram-webhook] status interceptor reply failed: no_response
+2026-02-22 16:05:57: Failed to fetch swarm queue tasks: SqliteError: near "exists": syntax error
+2026-02-22 16:05:57:     at Database.prepare (/Users/josh/.openclaw/workspace/mission-control/node_modules/better-sqlite3/lib/methods/wrappers.js:5:21)
+2026-02-22 16:05:57:     at L (/Users/josh/.openclaw/workspace/mission-control/.next/server/chunks/8890.js:404:544)
+2026-02-22 16:05:57:     at w (/Users/josh/.openclaw/workspace/mission-control/.next/server/app/api/swarm/tasks/route.js:1:1000)
+2026-02-22 16:05:57:     at /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:38417
+2026-02-22 16:05:57:     at /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/lib/trace/tracer.js:140:36
+2026-02-22 16:05:57:     at NoopContextManager.with (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:7062)
+2026-02-22 16:05:57:     at ContextAPI.with (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:518)
+2026-02-22 16:05:57:     at NoopTracer.startActiveSpan (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:18093)
+2026-02-22 16:05:57:     at ProxyTracer.startActiveSpan (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:18854)
+2026-02-22 16:05:57:     at /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/lib/trace/tracer.js:122:103 {
+2026-02-22 16:05:57:   code: 'SQLITE_ERROR'
+2026-02-22 16:05:57: }
+2026-02-22 16:05:57: Failed telegram webhook ingestion: SqliteError: near "exists": syntax error
+2026-02-22 16:05:57:     at Database.prepare (/Users/josh/.openclaw/workspace/mission-control/node_modules/better-sqlite3/lib/methods/wrappers.js:5:21)
+2026-02-22 16:05:57:     at L (/Users/josh/.openclaw/workspace/mission-control/.next/server/chunks/8890.js:404:544)
+2026-02-22 16:05:57:     at g (/Users/josh/.openclaw/workspace/mission-control/.next/server/app/api/webhooks/telegram/route.js:1:2244)
+2026-02-22 16:05:57:     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+2026-02-22 16:05:57:     at async /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:38411
+2026-02-22 16:05:57:     at async e_.execute (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:27880)
+2026-02-22 16:05:57:     at async e_.handle (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:39745)
+2026-02-22 16:05:57:     at async doRender (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/base-server.js:1353:42)
+2026-02-22 16:05:57:     at async cacheEntry.responseCache.get.routeKind (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/base-server.js:1575:28)
+2026-02-22 16:05:57:     at async NextNodeServer.renderToResponseWithComponentsImpl (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/base-server.js:1483:28) {
+2026-02-22 16:05:57:   code: 'SQLITE_ERROR'
+2026-02-22 16:05:57: }
+2026-02-22 16:05:57: Failed to fetch swarm queue tasks: SqliteError: near "exists": syntax error
+2026-02-22 16:05:57:     at Database.prepare (/Users/josh/.openclaw/workspace/mission-control/node_modules/better-sqlite3/lib/methods/wrappers.js:5:21)
+2026-02-22 16:05:57:     at L (/Users/josh/.openclaw/workspace/mission-control/.next/server/chunks/8890.js:404:544)
+2026-02-22 16:05:57:     at w (/Users/josh/.openclaw/workspace/mission-control/.next/server/app/api/swarm/tasks/route.js:1:1000)
+2026-02-22 16:05:57:     at /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:38417
+2026-02-22 16:05:57:     at /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/lib/trace/tracer.js:140:36
+2026-02-22 16:05:57:     at NoopContextManager.with (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:7062)
+2026-02-22 16:05:57:     at ContextAPI.with (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:518)
+2026-02-22 16:05:57:     at NoopTracer.startActiveSpan (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:18093)
+2026-02-22 16:05:57:     at ProxyTracer.startActiveSpan (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:18854)
+2026-02-22 16:05:57:     at /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/lib/trace/tracer.js:122:103 {
+2026-02-22 16:05:57:   code: 'SQLITE_ERROR'
+2026-02-22 16:05:57: }
+2026-02-22 16:06:00: Failed to fetch swarm queue tasks: SqliteError: near "exists": syntax error
+2026-02-22 16:06:00:     at Database.prepare (/Users/josh/.openclaw/workspace/mission-control/node_modules/better-sqlite3/lib/methods/wrappers.js:5:21)
+2026-02-22 16:06:00:     at L (/Users/josh/.openclaw/workspace/mission-control/.next/server/chunks/8890.js:404:544)
+2026-02-22 16:06:00:     at w (/Users/josh/.openclaw/workspace/mission-control/.next/server/app/api/swarm/tasks/route.js:1:1000)
+2026-02-22 16:06:00:     at /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/next-server/app-route.runtime.prod.js:6:38417
+2026-02-22 16:06:00:     at /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/lib/trace/tracer.js:140:36
+2026-02-22 16:06:00:     at NoopContextManager.with (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:7062)
+2026-02-22 16:06:00:     at ContextAPI.with (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:518)
+2026-02-22 16:06:00:     at NoopTracer.startActiveSpan (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:18093)
+2026-02-22 16:06:00:     at ProxyTracer.startActiveSpan (/Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/compiled/@opentelemetry/api/index.js:1:18854)
+2026-02-22 16:06:00:     at /Users/josh/.openclaw/workspace/mission-control/node_modules/next/dist/server/lib/trace/tracer.js:122:103 {
+2026-02-22 16:06:00:   code: 'SQLITE_ERROR'
+2026-02-22 16:06:00: }
+2026-02-22 16:06:51: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 16:06:59: [telegram-webhook] status interceptor reply failed: no_response
+2026-02-22 16:07:23: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 16:07:31: [telegram-webhook] status interceptor reply failed: no_response
+2026-02-22 16:18:07: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 16:56:18: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 22:42:12: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-22 23:48:40: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 00:02:01: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 00:08:31: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 00:16:13: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 00:29:11: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 00:44:01: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 00:50:00: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 00:56:59: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 01:04:47: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 01:10:09: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 10:17:39: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 10:23:14: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 10:23:37: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 10:32:55: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 10:44:36: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 10:51:54: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 10:59:43: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 11:21:23: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 11:54:01: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 13:23:37: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-23 13:33:38: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-24 00:15:37: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)
+2026-02-24 00:36:18: [SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)

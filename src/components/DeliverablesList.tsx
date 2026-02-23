@@ -1,220 +1,96 @@
-/**
- * DeliverablesList Component
- * Displays deliverables (files, URLs, artifacts) for a task
- */
-
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { FileText, Link as LinkIcon, Package, ExternalLink, Eye } from 'lucide-react';
-import { debug } from '@/lib/debug';
-import type { TaskDeliverable } from '@/lib/types';
+import { FileText, Eye } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+
+type SwarmDeliverable = {
+  id: string;
+  title: string;
+  path: string | null;
+  description: string | null;
+  created_at: string;
+  deliverable_type: 'file' | 'artifact' | 'url';
+};
 
 interface DeliverablesListProps {
   taskId: string;
 }
 
 export function DeliverablesList({ taskId }: DeliverablesListProps) {
-  const [deliverables, setDeliverables] = useState<TaskDeliverable[]>([]);
+  const [deliverables, setDeliverables] = useState<SwarmDeliverable[]>([]);
   const [loading, setLoading] = useState(true);
+  const [preview, setPreview] = useState<{ title: string; content: string } | null>(null);
 
   const loadDeliverables = useCallback(async () => {
     try {
-      const res = await fetch(`/api/tasks/${taskId}/deliverables`);
+      const res = await fetch(`/api/swarm/tasks/${taskId}/deliverables`);
       if (res.ok) {
         const data = await res.json();
-        setDeliverables(data);
+        setDeliverables(Array.isArray(data) ? data : []);
       }
     } catch (error) {
-      console.error('Failed to load deliverables:', error);
+      console.error('Failed to load swarm deliverables:', error);
     } finally {
       setLoading(false);
     }
   }, [taskId]);
 
   useEffect(() => {
-    loadDeliverables();
+    void loadDeliverables();
   }, [loadDeliverables]);
 
-  const getDeliverableIcon = (type: string) => {
-    switch (type) {
-      case 'file':
-        return <FileText className="w-5 h-5" />;
-      case 'url':
-        return <LinkIcon className="w-5 h-5" />;
-      case 'artifact':
-        return <Package className="w-5 h-5" />;
-      default:
-        return <FileText className="w-5 h-5" />;
+  const openPreview = async (d: SwarmDeliverable) => {
+    try {
+      const res = await fetch(`/api/swarm/tasks/${taskId}/deliverables/${d.id}/content`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setPreview({ title: d.title, content: data.content || '_No content_' });
+    } catch (error) {
+      console.error('Failed to preview deliverable:', error);
     }
   };
 
-  const handleOpen = async (deliverable: TaskDeliverable) => {
-    // URLs open directly in new tab
-    if (deliverable.deliverable_type === 'url' && deliverable.path) {
-      window.open(deliverable.path, '_blank');
-      return;
-    }
-
-    // Files - try to open in Finder
-    if (deliverable.path) {
-      try {
-        debug.file('Opening file in Finder', { path: deliverable.path });
-        const res = await fetch('/api/files/reveal', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filePath: deliverable.path }),
-        });
-
-        if (res.ok) {
-          debug.file('Opened in Finder successfully');
-          return;
-        }
-
-        const error = await res.json();
-        debug.file('Failed to open', error);
-
-        if (res.status === 404) {
-          alert(`File not found:\n${deliverable.path}\n\nThe file may have been moved or deleted.`);
-        } else if (res.status === 403) {
-          alert(`Cannot open this location:\n${deliverable.path}\n\nPath is outside allowed directories.`);
-        } else {
-          throw new Error(error.error || 'Unknown error');
-        }
-      } catch (error) {
-        console.error('Failed to open file:', error);
-        // Fallback: copy path to clipboard
-        try {
-          await navigator.clipboard.writeText(deliverable.path);
-          alert(`Could not open Finder. Path copied to clipboard:\n${deliverable.path}`);
-        } catch {
-          alert(`File path:\n${deliverable.path}`);
-        }
-      }
-    }
-  };
-
-  const handlePreview = (deliverable: TaskDeliverable) => {
-    if (deliverable.path) {
-      debug.file('Opening preview', { path: deliverable.path });
-      window.open(`/api/files/preview?path=${encodeURIComponent(deliverable.path)}`, '_blank');
-    }
-  };
-
-  const formatTimestamp = (timestamp: string) => {
-    const date = new Date(timestamp);
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-8">
-        <div className="text-mc-text-secondary">Loading deliverables...</div>
-      </div>
-    );
-  }
-
-  if (deliverables.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-8 text-mc-text-secondary">
-        <div className="text-4xl mb-2">📦</div>
-        <p>No deliverables yet</p>
-      </div>
-    );
-  }
+  if (loading) return <div className="py-8 text-center text-mc-text-secondary">Loading deliverables...</div>;
+  if (!deliverables.length) return <div className="py-8 text-center text-mc-text-secondary">No deliverables yet</div>;
 
   return (
-    <div className="space-y-3">
-      {deliverables.map((deliverable) => (
-        <div
-          key={deliverable.id}
-          className="flex gap-3 p-3 bg-mc-bg rounded-lg border border-mc-border hover:border-mc-accent transition-colors"
-        >
-          {/* Icon */}
-          <div className="flex-shrink-0 text-mc-accent">
-            {getDeliverableIcon(deliverable.deliverable_type)}
-          </div>
-
-          {/* Content */}
-          <div className="flex-1 min-w-0">
-            {/* Title - clickable for URLs */}
-            <div className="flex items-start justify-between gap-2">
-              {deliverable.deliverable_type === 'url' && deliverable.path ? (
-                <a
-                  href={deliverable.path}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-medium text-mc-accent hover:text-mc-accent/80 hover:underline flex items-center gap-1.5"
+    <>
+      <div className="space-y-3">
+        {deliverables.map((d) => (
+          <div key={d.id} className="flex gap-3 p-3 bg-mc-bg rounded-lg border border-mc-border">
+            <FileText className="w-5 h-5 text-mc-accent mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-medium text-sm text-mc-text truncate">{d.title}</div>
+                <button
+                  onClick={() => void openPreview(d)}
+                  className="p-1.5 rounded hover:bg-mc-bg-tertiary text-cyan-300"
+                  title="Quick Look"
                 >
-                  {deliverable.title}
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
-              ) : (
-                <h4 className="font-medium text-mc-text">{deliverable.title}</h4>
-              )}
-              <div className="flex items-center gap-1">
-                {/* Preview button for HTML files */}
-                {deliverable.deliverable_type === 'file' && deliverable.path?.endsWith('.html') && (
-                  <button
-                    onClick={() => handlePreview(deliverable)}
-                    className="flex-shrink-0 p-1.5 hover:bg-mc-bg-tertiary rounded text-mc-accent-cyan"
-                    title="Preview in browser"
-                  >
-                    <Eye className="w-4 h-4" />
-                  </button>
-                )}
-                {/* Open/Reveal button */}
-                {deliverable.path && (
-                  <button
-                    onClick={() => handleOpen(deliverable)}
-                    className="flex-shrink-0 p-1.5 hover:bg-mc-bg-tertiary rounded text-mc-accent"
-                    title={deliverable.deliverable_type === 'url' ? 'Open URL' : 'Reveal in Finder'}
-                  >
-                    <ExternalLink className="w-4 h-4" />
-                  </button>
-                )}
+                  <Eye className="w-4 h-4" />
+                </button>
               </div>
+              {d.description && <div className="text-xs text-mc-text-secondary mt-1 line-clamp-2">{d.description}</div>}
+              {d.path && <div className="text-[11px] font-mono text-mc-text-secondary mt-2 break-all">{d.path}</div>}
             </div>
+          </div>
+        ))}
+      </div>
 
-            {/* Description */}
-            {deliverable.description && (
-              <p className="text-sm text-mc-text-secondary mt-1">
-                {deliverable.description}
-              </p>
-            )}
-
-            {/* Path - clickable for URLs */}
-            {deliverable.path && (
-              deliverable.deliverable_type === 'url' ? (
-                <a
-                  href={deliverable.path}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-2 p-2 bg-mc-bg-tertiary rounded text-xs text-mc-accent hover:text-mc-accent/80 font-mono break-all block hover:bg-mc-bg-tertiary/80"
-                >
-                  {deliverable.path}
-                </a>
-              ) : (
-                <div className="mt-2 p-2 bg-mc-bg-tertiary rounded text-xs text-mc-text-secondary font-mono break-all">
-                  {deliverable.path}
-                </div>
-              )
-            )}
-
-            {/* Metadata */}
-            <div className="flex items-center gap-4 mt-2 text-xs text-mc-text-secondary">
-              <span className="capitalize">{deliverable.deliverable_type}</span>
-              <span>•</span>
-              <span>{formatTimestamp(deliverable.created_at)}</span>
+      {preview && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setPreview(null)}>
+          <div className="w-full max-w-4xl max-h-[85vh] overflow-hidden rounded-xl border border-mc-border bg-mc-bg-secondary" onClick={(e) => e.stopPropagation()}>
+            <div className="p-3 border-b border-mc-border flex items-center justify-between">
+              <div className="text-sm font-semibold">{preview.title}</div>
+              <button onClick={() => setPreview(null)} className="text-xs px-2 py-1 rounded bg-mc-bg-tertiary">Close</button>
+            </div>
+            <div className="p-5 overflow-y-auto max-h-[70vh] prose prose-invert prose-sm max-w-none">
+              <ReactMarkdown>{preview.content}</ReactMarkdown>
             </div>
           </div>
         </div>
-      ))}
-    </div>
+      )}
+    </>
   );
 }

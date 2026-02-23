@@ -22,10 +22,13 @@ export interface MissionControlConfig {
   defaultProjectName: string; // 'mission-control' or custom
 }
 
+const DEFAULT_WORKSPACE_BASE_PATH = '~/.openclaw/workspace';
+const DEFAULT_PROJECTS_PATH = '~/.openclaw/workspace/PROJECTS';
+
 const DEFAULT_CONFIG: MissionControlConfig = {
-  workspaceBasePath: '~/Documents/Shared',
-  projectsPath: '~/Documents/Shared/projects',
-  missionControlUrl: typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4000',
+  workspaceBasePath: DEFAULT_WORKSPACE_BASE_PATH,
+  projectsPath: DEFAULT_PROJECTS_PATH,
+  missionControlUrl: typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3005',
   defaultProjectName: 'mission-control',
 };
 
@@ -119,7 +122,7 @@ export function expandPath(path: string): string {
 export function getMissionControlUrl(): string {
   // Server-side: use env var or auto-detect
   if (typeof window === 'undefined') {
-    return process.env.MISSION_CONTROL_URL || 'http://localhost:4000';
+    return process.env.MISSION_CONTROL_URL || 'http://localhost:3005';
   }
 
   // Client-side: use config
@@ -136,7 +139,7 @@ export function getWorkspaceBasePath(): string {
   }
 
   // Server-side: check env var first, then default
-  return process.env.WORKSPACE_BASE_PATH || '~/Documents/Shared';
+  return process.env.WORKSPACE_BASE_PATH || DEFAULT_WORKSPACE_BASE_PATH;
 }
 
 /**
@@ -149,7 +152,7 @@ export function getProjectsPath(): string {
   }
 
   // Server-side: check env var first, then default
-  return process.env.PROJECTS_PATH || '~/Documents/Shared/projects';
+  return process.env.PROJECTS_PATH || DEFAULT_PROJECTS_PATH;
 }
 
 /**

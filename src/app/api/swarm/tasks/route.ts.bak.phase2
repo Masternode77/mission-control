@@ -1,0 +1,196 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { v4 as uuidv4 } from 'uuid';
+import { queryAll, run } from '@/lib/db';
+import { broadcast } from '@/lib/events';
+import { normalizeSwarmPipelineStatus, type SwarmPipelineStatus } from '@/lib/swarm-status';
+
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+type SwarmTaskRow = {
+  task_id: string;
+  title: string;
+  objective: string | null;
+  status: string;
+  priority: string;
+  ws: string;
+  created_at: string;
+  updated_at: string;
+  parent_task_id: string | null;
+  execution_order: number;
+  context_payload: string | null;
+  owner_role_id: string | null;
+  owner_display_name: string | null;
+  rejected_count: number;
+  latest_revision_note: string | null;
+  latest_run_status: string | null;
+  latest_run_error: string | null;
+  metadata?: string | null;
+  source_event?: string | null;
+};
+
+function mapPriority(priority: string): 'low' | 'normal' | 'high' | 'urgent' {
+  const p = (priority || '').toUpperCase();
+  if (p === 'P0' || p === 'URGENT') return 'urgent';
+  if (p === 'P1' || p === 'HIGH') return 'high';
+  if (p === 'P3' || p === 'LOW') return 'low';
+  return 'normal';
+}
+
+export async function GET(request: NextRequest) {
+  try {
+    const workspaceId = request.nextUrl.searchParams.get('workspace_id') || 'default';
+    const hasMetadataColumn = queryAll<{ name: string }>("PRAGMA table_info(swarm_tasks)").some((c) => c.name === 'metadata');
+
+    const rows = queryAll<SwarmTaskRow>(
+      `
+      SELECT
+        st.task_id,
+        st.title,
+        st.objective,
+        st.status,
+        st.priority,
+        st.ws,
+        st.created_at,
+        st.updated_at,
+        st.parent_task_id,
+        COALESCE(st.execution_order, 0) as execution_order,
+        st.context_payload,
+        st.owner_role_id,
+        ar.display_name as owner_display_name,
+        COALESCE((SELECT COUNT(*) FROM swarm_approvals sa WHERE sa.task_id = st.task_id AND sa.approval_status = 'rejected'), 0) as rejected_count,
+        (SELECT sa.decision_note FROM swarm_approvals sa WHERE sa.task_id = st.task_id AND sa.approval_status = 'rejected' ORDER BY sa.decided_at DESC LIMIT 1) as latest_revision_note,
+        (SELECT sr.run_status FROM swarm_runs sr WHERE sr.task_id = st.task_id ORDER BY sr.created_at DESC LIMIT 1) as latest_run_status,
+        (SELECT sr.error_message FROM swarm_runs sr WHERE sr.task_id = st.task_id ORDER BY sr.created_at DESC LIMIT 1) as latest_run_error
+        ${hasMetadataColumn ? ', st.metadata as metadata' : ''},
+        st.source_event as source_event
+      FROM swarm_tasks st
+      LEFT JOIN agent_roles ar ON ar.role_id = st.owner_role_id
+      ORDER BY st.updated_at DESC, st.created_at DESC
+      `
+    );
+
+    const filteredRows =
+      workspaceId && workspaceId !== 'default' && workspaceId !== 'all'
+        ? rows.filter((row) => row.ws === workspaceId)
+        : rows;
+
+    const tasks = filteredRows.map((row) => {
+      const normalizedStatus: SwarmPipelineStatus = normalizeSwarmPipelineStatus(row.status);
+      let mergedMetadata: any = undefined;
+      try {
+        const direct = row.metadata ? JSON.parse(row.metadata) : undefined;
+        const source = row.source_event ? JSON.parse(row.source_event) : undefined;
+        if (direct && typeof direct === 'object') mergedMetadata = direct;
+        else if (source?.metadata && typeof source.metadata === 'object') mergedMetadata = source.metadata;
+        else if (source?.chat_id) mergedMetadata = { telegram_chat_id: String(source.chat_id), telegram_message_id: source.message_id || null };
+      } catch {
+        // ignore parse errors
+      }
+      return {
+        id: row.task_id,
+        title: row.title,
+        description: row.objective || undefined,
+        status: normalizedStatus,
+        priority: mapPriority(row.priority),
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        swarm_status: row.status,
+        ws: row.ws,
+        parent_task_id: row.parent_task_id || undefined,
+        execution_order: Number.isFinite(Number(row.execution_order)) ? Number(row.execution_order) : 0,
+        context_payload: row.context_payload || undefined,
+        metadata: mergedMetadata ? JSON.stringify(mergedMetadata) : (row.metadata || undefined),
+        is_rework: Number(row.rejected_count || 0) > 0,
+        revision_note: row.latest_revision_note || undefined,
+        latest_run_status: row.latest_run_status || undefined,
+        latest_run_error: row.latest_run_error || undefined,
+        assigned_agent: row.owner_role_id
+          ? {
+              id: row.owner_role_id,
+              name: row.owner_display_name || row.owner_role_id,
+              avatar_emoji: '🧠',
+            }
+          : undefined,
+      };
+    });
+
+    return NextResponse.json(tasks);
+  } catch (error) {
+    console.error('Failed to fetch swarm queue tasks:', error);
+    return NextResponse.json({ error: 'Failed to fetch swarm queue tasks' }, { status: 500 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const title = String(body?.title || '').trim();
+    if (!title) return NextResponse.json({ error: 'title is required' }, { status: 400 });
+
+    const now = new Date().toISOString();
+    const taskId = uuidv4();
+    const ws = String(body?.workspace_id || body?.ws || 'default');
+
+    const priorityInput = String(body?.priority || 'normal').toLowerCase();
+    const priority = priorityInput === 'urgent' ? 'P0' : priorityInput === 'high' ? 'P1' : priorityInput === 'low' ? 'P3' : 'P2';
+
+    const ownerRoleId = 'MC-MAIN';
+    const status = normalizeSwarmPipelineStatus('intake');
+    const objective = body?.description || body?.objective || null;
+
+    const parentTaskIdRaw = body?.parent_task_id;
+    const parentTaskId = typeof parentTaskIdRaw === 'string' && parentTaskIdRaw.trim().length > 0
+      ? parentTaskIdRaw.trim()
+      : null;
+
+    const parsedExecutionOrder = Number(body?.execution_order ?? 0);
+    if (!Number.isInteger(parsedExecutionOrder) || parsedExecutionOrder < 0) {
+      return NextResponse.json({ error: 'execution_order must be a non-negative integer' }, { status: 400 });
+    }
+    const executionOrder = parsedExecutionOrder;
+
+    let contextPayload: string | null = null;
+    if (body?.context_payload !== undefined && body?.context_payload !== null) {
+      if (typeof body.context_payload === 'string') {
+        contextPayload = body.context_payload;
+      } else {
+        try {
+          contextPayload = JSON.stringify(body.context_payload);
+        } catch {
+          return NextResponse.json({ error: 'context_payload must be JSON-serializable' }, { status: 400 });
+        }
+      }
+    }
+
+    run(
+      `INSERT INTO swarm_tasks (task_id, parent_task_id, ws, title, objective, owner_role_id, priority, status, execution_order, context_payload, created_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [taskId, parentTaskId, ws, title, objective, ownerRoleId, priority, status, executionOrder, contextPayload, ownerRoleId, now, now]
+    );
+
+    const newTask = {
+      id: taskId,
+      title,
+      description: objective || undefined,
+      status,
+      priority: mapPriority(priority),
+      created_at: now,
+      updated_at: now,
+      swarm_status: status,
+      ws,
+      parent_task_id: parentTaskId || undefined,
+      execution_order: executionOrder,
+      context_payload: contextPayload || undefined,
+      assigned_agent: { id: ownerRoleId, name: 'Monica · Chief of Staff', avatar_emoji: '🧠' },
+    };
+
+    broadcast({ type: 'task_created', payload: newTask });
+    broadcast({ type: 'event_logged', payload: { taskId, sessionId: taskId, summary: 'task_created' } });
+
+    return NextResponse.json(newTask, { status: 201 });
+  } catch (error) {
+    console.error('Failed to create swarm task:', error);
+    return NextResponse.json({ error: 'Failed to create swarm task' }, { status: 500 });
+  }
+}

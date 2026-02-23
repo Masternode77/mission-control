@@ -1,37 +1,163 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, ChevronRight, GripVertical } from 'lucide-react';
-import { useMissionControl } from '@/lib/store';
-import { triggerAutoDispatch, shouldTriggerAutoDispatch } from '@/lib/auto-dispatch';
-import type { Task, TaskStatus } from '@/lib/types';
 import { TaskModal } from './TaskModal';
+import { SWARM_PIPELINE_COLUMNS, type SwarmPipelineStatus } from '@/lib/swarm-status';
+import { useGlobalSSE } from '@/providers/SSEProvider';
 import { formatDistanceToNow } from 'date-fns';
+import ReactMarkdown from 'react-markdown';
+import {
+  approveApproval,
+  fetchApprovalPreview,
+  fetchPendingApprovals,
+  rejectApproval,
+  type ApprovalPreview,
+  type PendingApproval,
+} from '@/lib/swarm-approvals';
 
 interface MissionQueueProps {
   workspaceId?: string;
 }
 
-const COLUMNS: { id: TaskStatus; label: string; color: string }[] = [
-  { id: 'planning', label: '📋 PLANNING', color: 'border-t-mc-accent-purple' },
-  { id: 'inbox', label: 'INBOX', color: 'border-t-mc-accent-pink' },
-  { id: 'assigned', label: 'ASSIGNED', color: 'border-t-mc-accent-yellow' },
-  { id: 'in_progress', label: 'IN PROGRESS', color: 'border-t-mc-accent' },
-  { id: 'testing', label: 'TESTING', color: 'border-t-mc-accent-cyan' },
-  { id: 'review', label: 'REVIEW', color: 'border-t-mc-accent-purple' },
-  { id: 'done', label: 'DONE', color: 'border-t-mc-accent-green' },
-];
+type QueueTask = {
+  id: string;
+  title: string;
+  description?: string;
+  status: SwarmPipelineStatus;
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  created_at: string;
+  updated_at: string;
+  parent_task_id?: string;
+  swarm_status?: string;
+  metadata?: string | Record<string, any>;
+  is_rework?: boolean;
+  revision_note?: string;
+  latest_run_status?: string;
+  latest_run_error?: string;
+  assigned_agent?: { id: string; name: string; avatar_emoji: string };
+};
+
+const COLUMNS = SWARM_PIPELINE_COLUMNS;
+const ARCHIVE_HIDE_DAYS = 7;
+
+function shouldHideCompleted(task: QueueTask) {
+  if (String(task.status) !== 'completed') return false;
+  const updated = new Date(task.updated_at || task.created_at).getTime();
+  const diffDays = (Date.now() - updated) / (1000 * 60 * 60 * 24);
+  return diffDays >= ARCHIVE_HIDE_DAYS;
+}
+
+function parseMetadata(meta: QueueTask['metadata']) {
+  if (!meta) return {};
+  if (typeof meta === 'object') return meta;
+  try {
+    return JSON.parse(meta);
+  } catch {
+    return {};
+  }
+}
+
+function getSubtaskProgress(task: QueueTask, allTasks: QueueTask[]) {
+  const children = allTasks.filter((t) => t.parent_task_id === task.id);
+  const total = children.length;
+  const completed = children.filter((t) => t.status === 'completed').length;
+  return { total, completed };
+}
 
 export function MissionQueue({ workspaceId }: MissionQueueProps) {
-  const { tasks, updateTaskStatus, addEvent } = useMissionControl();
+  const [tasks, setTasks] = useState<QueueTask[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
-  const [draggedTask, setDraggedTask] = useState<Task | null>(null);
+  const [editingTask, setEditingTask] = useState<QueueTask | null>(null);
+  const [draggedTask, setDraggedTask] = useState<QueueTask | null>(null);
+  const [showArchivedCompleted, setShowArchivedCompleted] = useState(false);
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
+  const [preview, setPreview] = useState<ApprovalPreview | null>(null);
+  const [rejectMode, setRejectMode] = useState(false);
+  const [revisionNote, setRevisionNote] = useState('');
+  const [hitlBusy, setHitlBusy] = useState(false);
 
-  const getTasksByStatus = (status: TaskStatus) =>
-    tasks.filter((task) => task.status === status);
+  const inFlightRef = useRef(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { sequence, lastEvent } = useGlobalSSE();
 
-  const handleDragStart = (e: React.DragEvent, task: Task) => {
+  const loadTasks = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    try {
+      const ws = workspaceId || 'default';
+      const res = await fetch(`/api/swarm/tasks?workspace_id=${ws}`);
+      if (res.ok) setTasks(await res.json());
+    } catch (error) {
+      console.error('Failed to load swarm queue tasks:', error);
+    } finally {
+      inFlightRef.current = false;
+    }
+  }, [workspaceId]);
+
+  const loadPendingApprovals = useCallback(async () => {
+    try {
+      setPendingApprovals(await fetchPendingApprovals());
+    } catch (error) {
+      console.error('Failed to load pending approvals:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadTasks();
+    void loadPendingApprovals();
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [loadTasks, loadPendingApprovals]);
+
+  useEffect(() => {
+    const onOpen = async (evt: Event) => {
+      const detail = (evt as CustomEvent<{ taskId?: string }>).detail;
+      const taskId = String(detail?.taskId || '');
+      if (!taskId) return;
+
+      const fromState = tasks.find((t) => t.id === taskId);
+      if (fromState) {
+        setEditingTask(fromState);
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/swarm/tasks/${taskId}`);
+        if (!res.ok) return;
+        const t = await res.json();
+        setEditingTask(t);
+      } catch {
+        // ignore
+      }
+    };
+
+    window.addEventListener('mc:open-task', onOpen as EventListener);
+    return () => window.removeEventListener('mc:open-task', onOpen as EventListener);
+  }, [tasks]);
+
+  useEffect(() => {
+    if (!lastEvent) return;
+    const summary = lastEvent.type === 'event_logged' ? String((lastEvent.payload as { summary?: string })?.summary || '') : '';
+    const shouldReload =
+      lastEvent.type === 'task_created' ||
+      lastEvent.type === 'task_updated' ||
+      lastEvent.type === 'task_deleted' ||
+      (lastEvent.type === 'event_logged' && /task_created|task_status_changed|task_assigned|EXECUTOR_ERROR|DELIVERABLE_SAVED|THINKING|hitl_approved|REWORK_DISPATCH|synthesis_task_auto_created/.test(summary));
+
+    if (!shouldReload) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      void loadTasks();
+      void loadPendingApprovals();
+    }, 700);
+  }, [sequence, lastEvent, loadTasks, loadPendingApprovals]);
+
+  const visibleTasks = showArchivedCompleted ? tasks : tasks.filter((t) => !shouldHideCompleted(t));
+  const getTasksByStatus = (status: SwarmPipelineStatus) => visibleTasks.filter((task) => task.status === status);
+
+  const handleDragStart = (e: React.DragEvent, task: QueueTask) => {
     setDraggedTask(task);
     e.dataTransfer.effectAllowed = 'move';
   };
@@ -41,105 +167,143 @@ export function MissionQueue({ workspaceId }: MissionQueueProps) {
     e.dataTransfer.dropEffect = 'move';
   };
 
-  const handleDrop = async (e: React.DragEvent, targetStatus: TaskStatus) => {
+  const handleDrop = async (e: React.DragEvent, targetStatus: SwarmPipelineStatus) => {
     e.preventDefault();
     if (!draggedTask || draggedTask.status === targetStatus) {
       setDraggedTask(null);
       return;
     }
-
-    // Optimistic update
-    updateTaskStatus(draggedTask.id, targetStatus);
-
-    // Persist to API
+    setTasks((prev) => prev.map((t) => (t.id === draggedTask.id ? { ...t, status: targetStatus } : t)));
     try {
-      const res = await fetch(`/api/tasks/${draggedTask.id}`, {
+      await fetch(`/api/swarm/tasks/${draggedTask.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: targetStatus }),
       });
-
-      if (res.ok) {
-        // Add event
-        addEvent({
-          id: crypto.randomUUID(),
-          type: targetStatus === 'done' ? 'task_completed' : 'task_status_changed',
-          task_id: draggedTask.id,
-          message: `Task "${draggedTask.title}" moved to ${targetStatus}`,
-          created_at: new Date().toISOString(),
-        });
-
-        // Check if auto-dispatch should be triggered and execute it
-        if (shouldTriggerAutoDispatch(draggedTask.status, targetStatus, draggedTask.assigned_agent_id)) {
-          const result = await triggerAutoDispatch({
-            taskId: draggedTask.id,
-            taskTitle: draggedTask.title,
-            agentId: draggedTask.assigned_agent_id,
-            agentName: draggedTask.assigned_agent?.name || 'Unknown Agent',
-            workspaceId: draggedTask.workspace_id
-          });
-
-          if (!result.success) {
-            console.error('Auto-dispatch failed:', result.error);
-            // Optionally show error to user here if needed
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Failed to update task status:', error);
-      // Revert on error
-      updateTaskStatus(draggedTask.id, draggedTask.status);
+      await loadTasks();
+    } catch {
+      await loadTasks();
     }
-
     setDraggedTask(null);
+  };
+
+  const openReview = async (approvalId: string) => {
+    try {
+      setPreview(await fetchApprovalPreview(approvalId));
+      setRejectMode(false);
+      setRevisionNote('');
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const approveFromZone = async (approvalId: string) => {
+    try {
+      setHitlBusy(true);
+      await approveApproval(approvalId, 'human');
+      setPreview(null);
+      setRejectMode(false);
+      setRevisionNote('');
+      await Promise.all([loadTasks(), loadPendingApprovals()]);
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : 'Approval failed');
+    } finally {
+      setHitlBusy(false);
+    }
+  };
+
+  const rejectFromZone = async () => {
+    if (!preview || !revisionNote.trim()) return;
+    try {
+      setHitlBusy(true);
+      await rejectApproval(preview.approval_id, revisionNote.trim(), 'human');
+      setPreview(null);
+      setRejectMode(false);
+      setRevisionNote('');
+      await Promise.all([loadTasks(), loadPendingApprovals()]);
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : 'Reject failed');
+    } finally {
+      setHitlBusy(false);
+    }
   };
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Header */}
       <div className="p-3 border-b border-mc-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <ChevronRight className="w-4 h-4 text-mc-text-secondary" />
-          <span className="text-sm font-medium uppercase tracking-wider">Mission Queue</span>
+          <span className="text-sm font-medium uppercase tracking-wider">Mission Queue (Swarm)</span>
+          <label className="ml-4 text-xs text-mc-text-secondary flex items-center gap-2">
+            <input type="checkbox" checked={showArchivedCompleted} onChange={(e) => setShowArchivedCompleted(e.target.checked)} />
+            Show archived completed (&gt;=7d)
+          </label>
         </div>
-        <button
-          onClick={() => setShowCreateModal(true)}
-          className="flex items-center gap-2 px-3 py-1.5 bg-mc-accent-pink text-mc-bg rounded text-sm font-medium hover:bg-mc-accent-pink/90"
-        >
+        <button onClick={() => setShowCreateModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-mc-accent-pink text-mc-bg rounded text-sm font-medium hover:bg-mc-accent-pink/90">
           <Plus className="w-4 h-4" />
           New Task
         </button>
       </div>
 
-      {/* Kanban Columns */}
+      <section className="mx-3 mt-3 rounded-xl border-2 border-amber-500/60 bg-amber-500/10 p-4">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-amber-300">HITL Zone (awaiting-human-action)</h3>
+            <p className="text-xs text-mc-text-secondary mt-1">Queue View 전용 승인 패널 · 여기서 바로 보고서 리뷰/승인/반려 가능</p>
+          </div>
+          <span className="text-xs px-2 py-1 rounded bg-amber-500/20 text-amber-300">{pendingApprovals.length} pending</span>
+        </div>
+
+        {pendingApprovals.length === 0 ? (
+          <div className="text-xs text-mc-text-secondary">No pending HITL approvals.</div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {pendingApprovals.map((item) => (
+              <div key={item.approval_id} className="rounded border border-amber-500/40 bg-mc-bg-secondary p-3">
+                <div className="text-sm font-medium line-clamp-2">{item.title || item.task_id}</div>
+                <div className="text-[10px] text-mc-text-secondary mt-1 mb-2">{item.task_id}</div>
+                <div className="flex gap-2">
+                  <button onClick={() => void openReview(item.approval_id)} className="px-2 py-1.5 rounded bg-cyan-500/20 text-cyan-300 text-xs">Review</button>
+                  <button onClick={() => void approveFromZone(item.approval_id)} disabled={hitlBusy} className="px-2 py-1.5 rounded bg-emerald-500/20 text-emerald-300 text-xs disabled:opacity-50">✅ Approve</button>
+                  <button onClick={() => void openReview(item.approval_id)} className="px-2 py-1.5 rounded bg-rose-500/20 text-rose-300 text-xs">❌ Reject</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       <div className="flex-1 flex gap-3 p-3 overflow-x-auto">
         {COLUMNS.map((column) => {
           const columnTasks = getTasksByStatus(column.id);
           return (
-            <div
-              key={column.id}
-              className={`flex-1 min-w-[220px] max-w-[300px] flex flex-col bg-mc-bg rounded-lg border border-mc-border/50 border-t-2 ${column.color}`}
-              onDragOver={handleDragOver}
-              onDrop={(e) => handleDrop(e, column.id)}
-            >
-              {/* Column Header */}
+            <div key={column.id} className={`flex-1 min-w-[220px] max-w-[300px] flex flex-col bg-mc-bg rounded-lg border border-mc-border/50 border-t-2 ${column.color}`} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, column.id)}>
               <div className="p-2 border-b border-mc-border flex items-center justify-between">
-                <span className="text-xs font-medium uppercase text-mc-text-secondary">
-                  {column.label}
-                </span>
-                <span className="text-xs bg-mc-bg-tertiary px-2 py-0.5 rounded text-mc-text-secondary">
-                  {columnTasks.length}
-                </span>
+                <div>
+                  <span className="text-xs font-medium uppercase text-mc-text-secondary">{column.label}</span>
+                  <div className="text-[10px] text-mc-text-secondary/70">{column.subtitle}</div>
+                </div>
+                <span className="text-xs bg-mc-bg-tertiary px-2 py-0.5 rounded text-mc-text-secondary">{columnTasks.length}</span>
               </div>
 
-              {/* Tasks */}
               <div className="flex-1 overflow-y-auto p-2 space-y-2">
                 {columnTasks.map((task) => (
                   <TaskCard
                     key={task.id}
                     task={task}
+                    allTasks={visibleTasks}
                     onDragStart={handleDragStart}
                     onClick={() => setEditingTask(task)}
+                    onDispatch={async (t) => {
+                      await fetch(`/api/swarm/tasks/${t.id}/orchestrate`, { method: 'POST' });
+                      void loadTasks();
+                    }}
+                    onRetry={async (t) => {
+                      await fetch(`/api/swarm/tasks/${t.id}/retry`, { method: 'POST' });
+                      void loadTasks();
+                    }}
                     isDragging={draggedTask?.id === task.id}
                   />
                 ))}
@@ -149,92 +313,140 @@ export function MissionQueue({ workspaceId }: MissionQueueProps) {
         })}
       </div>
 
-      {/* Modals */}
-      {showCreateModal && (
-        <TaskModal onClose={() => setShowCreateModal(false)} workspaceId={workspaceId} />
-      )}
-      {editingTask && (
-        <TaskModal task={editingTask} onClose={() => setEditingTask(null)} workspaceId={workspaceId} />
+      {showCreateModal && <TaskModal onClose={() => setShowCreateModal(false)} workspaceId={workspaceId} onSaved={() => void loadTasks()} />}
+      {editingTask && <TaskModal task={editingTask as never} onClose={() => setEditingTask(null)} workspaceId={workspaceId} onSaved={() => void loadTasks()} />}
+
+      {preview && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setPreview(null)}>
+          <div className="w-full max-w-5xl max-h-[88vh] overflow-hidden rounded-xl border border-mc-border bg-mc-bg-secondary" onClick={(e) => e.stopPropagation()}>
+            <div className="p-3 border-b border-mc-border flex items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold">{preview.title}</div>
+                <div className="text-xs text-mc-text-secondary">{preview.task_id}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <a href={preview.obsidian_url} className="text-xs px-2 py-1 rounded bg-violet-500/20 text-violet-300">Open in Obsidian</a>
+              </div>
+            </div>
+
+            <div className="p-5 overflow-y-auto max-h-[58vh] prose prose-invert prose-sm max-w-none">
+              <ReactMarkdown>{preview.markdown}</ReactMarkdown>
+            </div>
+
+            {rejectMode && (
+              <div className="px-5 pb-3">
+                <label className="text-xs text-amber-300 mb-1 block">Revision Note (반려 사유)</label>
+                <textarea value={revisionNote} onChange={(e) => setRevisionNote(e.target.value)} className="w-full h-24 rounded border border-amber-500/40 bg-mc-bg p-2 text-xs" placeholder="수정 방향을 구체적으로 입력" />
+              </div>
+            )}
+
+            <div className="p-3 border-t border-mc-border flex justify-end gap-2">
+              {!rejectMode ? (
+                <>
+                  <button onClick={() => setRejectMode(true)} className="px-3 py-2 rounded bg-rose-500/20 text-rose-300 text-xs">❌ Reject</button>
+                  <button onClick={() => void approveFromZone(preview.approval_id)} disabled={hitlBusy} className="px-3 py-2 rounded bg-emerald-500/20 text-emerald-300 text-xs disabled:opacity-50">✅ Approve</button>
+                </>
+              ) : (
+                <>
+                  <button onClick={() => { setRejectMode(false); setRevisionNote(''); }} className="px-3 py-2 rounded bg-slate-500/20 text-slate-200 text-xs">Cancel</button>
+                  <button onClick={() => void rejectFromZone()} disabled={!revisionNote.trim() || hitlBusy} className="px-3 py-2 rounded bg-amber-500/20 text-amber-300 text-xs disabled:opacity-50">Confirm Reject / Retry</button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
 }
 
-interface TaskCardProps {
-  task: Task;
-  onDragStart: (e: React.DragEvent, task: Task) => void;
+function TaskCard({
+  task,
+  allTasks,
+  onDragStart,
+  onClick,
+  onDispatch,
+  onRetry,
+  isDragging,
+}: {
+  task: QueueTask;
+  allTasks: QueueTask[];
+  onDragStart: (e: React.DragEvent, task: QueueTask) => void;
   onClick: () => void;
+  onDispatch: (task: QueueTask) => void;
+  onRetry: (task: QueueTask) => void;
   isDragging: boolean;
-}
-
-function TaskCard({ task, onDragStart, onClick, isDragging }: TaskCardProps) {
-  const priorityStyles = {
-    low: 'text-mc-text-secondary',
-    normal: 'text-mc-accent',
-    high: 'text-mc-accent-yellow',
-    urgent: 'text-mc-accent-red',
-  };
-
-  const priorityDots = {
-    low: 'bg-mc-text-secondary/40',
-    normal: 'bg-mc-accent',
-    high: 'bg-mc-accent-yellow',
-    urgent: 'bg-mc-accent-red',
-  };
-
-  const isPlanning = task.status === 'planning';
+}) {
+  const priorityStyles = { low: 'text-mc-text-secondary', normal: 'text-mc-accent', high: 'text-mc-accent-yellow', urgent: 'text-mc-accent-red' };
+  const priorityDots = { low: 'bg-mc-text-secondary/40', normal: 'bg-mc-accent', high: 'bg-mc-accent-yellow', urgent: 'bg-mc-accent-red' };
+  const metadata = parseMetadata(task.metadata);
+  const isTelegramTask = Boolean(metadata?.telegram_chat_id);
+  const progress = getSubtaskProgress(task, allTasks);
+  const isSubtask = Boolean(task.parent_task_id);
 
   return (
-    <div
-      draggable
-      onDragStart={(e) => onDragStart(e, task)}
-      onClick={onClick}
-      className={`group bg-mc-bg-secondary border rounded-lg cursor-pointer transition-all hover:shadow-lg hover:shadow-black/20 ${
-        isDragging ? 'opacity-50 scale-95' : ''
-      } ${isPlanning ? 'border-purple-500/40 hover:border-purple-500' : 'border-mc-border/50 hover:border-mc-accent/40'}`}
-    >
-      {/* Drag handle bar */}
+    <div draggable onDragStart={(e) => onDragStart(e, task)} onClick={onClick} className={`group bg-mc-bg-secondary border rounded-lg cursor-pointer transition-all hover:shadow-lg hover:shadow-black/20 ${isDragging ? 'opacity-50 scale-95' : ''} ${task.is_rework ? 'border-orange-400/80 shadow-[0_0_12px_rgba(251,146,60,0.45)]' : 'border-mc-border/50 hover:border-mc-accent/40'}`}>
       <div className="flex items-center justify-center py-1.5 border-b border-mc-border/30 opacity-0 group-hover:opacity-100 transition-opacity">
         <GripVertical className="w-4 h-4 text-mc-text-secondary/50 cursor-grab" />
       </div>
 
-      {/* Card content */}
       <div className="p-4">
-        {/* Title */}
-        <h4 className="text-sm font-medium leading-snug line-clamp-2 mb-3">
-          {task.title}
-        </h4>
-        
-        {/* Planning mode indicator */}
-        {isPlanning && (
-          <div className="flex items-center gap-2 mb-3 py-2 px-3 bg-purple-500/10 rounded-md border border-purple-500/20">
-            <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse flex-shrink-0" />
-            <span className="text-xs text-purple-400 font-medium">Continue planning</span>
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2">
+            {isSubtask && <span className="text-[10px] px-1.5 py-0.5 rounded bg-fuchsia-500/20 text-fuchsia-300 border border-fuchsia-400/40">↳ Subtask</span>}
+            {isTelegramTask && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-400/40">✈️ Telegram</span>}
+            {task.is_rework && <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300">Rework</span>}
           </div>
-        )}
+        </div>
 
-        {/* Assigned agent */}
+        <div className="flex items-start justify-between gap-2 mb-3">
+          <h4 className="text-sm font-medium leading-snug line-clamp-2">{task.title}</h4>
+        </div>
+
         {task.assigned_agent && (
           <div className="flex items-center gap-2 mb-3 py-1.5 px-2 bg-mc-bg-tertiary/50 rounded">
-            <span className="text-base">{(task.assigned_agent as unknown as { avatar_emoji: string }).avatar_emoji}</span>
-            <span className="text-xs text-mc-text-secondary truncate">
-              {(task.assigned_agent as unknown as { name: string }).name}
-            </span>
+            <span className="text-base">{task.assigned_agent.avatar_emoji}</span>
+            <span className="text-xs text-mc-text-secondary truncate">{task.assigned_agent.name}</span>
           </div>
         )}
 
-        {/* Footer: priority + timestamp */}
+        {task.latest_run_status === 'failed' && (
+          <div className="mb-2 p-2 text-[11px] rounded border border-red-500/40 bg-red-500/10 text-red-300 line-clamp-2">
+            {task.latest_run_error || 'Execution failed (no error text)'}
+          </div>
+        )}
+
+        {progress.total > 0 && (
+          <div className="mb-2 p-2 rounded border border-cyan-500/30 bg-cyan-500/10">
+            <div className="text-[11px] text-cyan-200">Subtasks: {progress.completed}/{progress.total}</div>
+            <div className="mt-1 h-1.5 w-full rounded bg-mc-bg-tertiary overflow-hidden">
+              <div
+                className="h-1.5 rounded bg-cyan-400"
+                style={{ width: `${Math.min(100, Math.round((progress.completed / progress.total) * 100))}%` }}
+              />
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center justify-between pt-2 border-t border-mc-border/20">
           <div className="flex items-center gap-1.5">
             <div className={`w-1.5 h-1.5 rounded-full ${priorityDots[task.priority]}`} />
-            <span className={`text-xs capitalize ${priorityStyles[task.priority]}`}>
-              {task.priority}
-            </span>
+            <span className={`text-xs capitalize ${priorityStyles[task.priority]}`}>{task.priority}</span>
           </div>
-          <span className="text-[10px] text-mc-text-secondary/60">
-            {formatDistanceToNow(new Date(task.created_at), { addSuffix: true })}
-          </span>
+          <span className="text-[10px] text-mc-text-secondary/60">{formatDistanceToNow(new Date(task.updated_at || task.created_at), { addSuffix: true })}</span>
         </div>
+
+        {task.status === 'intake' && (
+          <button onClick={(e) => { e.stopPropagation(); onDispatch(task); }} className="mt-2 w-full text-[11px] px-2 py-1 rounded border border-cyan-500/50 text-cyan-300 hover:bg-cyan-500/10">
+            🚀 Dispatch to Monica
+          </button>
+        )}
+
+        {task.latest_run_status === 'failed' && (
+          <button onClick={(e) => { e.stopPropagation(); onRetry(task); }} className="mt-2 w-full text-[11px] px-2 py-1 rounded border border-amber-500/50 text-amber-300 hover:bg-amber-500/10">
+            🔄 Retry Execution
+          </button>
+        )}
       </div>
     </div>
   );

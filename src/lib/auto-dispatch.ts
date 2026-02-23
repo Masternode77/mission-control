@@ -20,7 +20,7 @@ export async function triggerAutoDispatch(options: AutoDispatchOptions): Promise
   }
 
   try {
-    const dispatchRes = await fetch(`/api/tasks/${taskId}/dispatch`, {
+    const dispatchRes = await fetch(`/api/swarm/tasks/${taskId}/dispatch`, {
       method: 'POST',
     });
 

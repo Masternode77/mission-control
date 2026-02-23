@@ -309,7 +309,8 @@ export type SSEEventType =
   | 'activity_logged'
   | 'deliverable_added'
   | 'agent_spawned'
-  | 'agent_completed';
+  | 'agent_completed'
+  | 'event_logged';
 
 export interface SSEEvent {
   type: SSEEventType;

@@ -1,0 +1,78 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { v4 as uuidv4 } from 'uuid';
+import { run } from '@/lib/db';
+import { broadcast } from '@/lib/events';
+import { igniteTaskOrchestration } from '@/lib/swarm-ignite';
+
+export const dynamic = 'force-dynamic';
+
+async function createRadarTaskAndIgnite(source: string) {
+  const now = new Date().toISOString();
+  const taskId = uuidv4();
+
+  run(
+    `INSERT INTO swarm_tasks (
+      task_id, ws, title, objective, owner_role_id, priority, status,
+      origin_type, execution_order, context_payload, created_by, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      taskId,
+      'default',
+      'Global Market & Data Center Daily Radar',
+      'Build daily radar across macro, rates/FX, AI semiconductor supply chain, and data center market moves. Fan-out to 2-3 specialists and synthesize final action memo.',
+      'MC-MAIN',
+      'P1',
+      'orchestrating',
+      'proactive_radar',
+      0,
+      JSON.stringify({ type: 'proactive_radar', trigger_source: source, triggered_at: now }),
+      'MC-MAIN',
+      now,
+      now,
+    ]
+  );
+
+  broadcast({
+    type: 'task_created',
+    payload: {
+      id: taskId,
+      task_id: taskId,
+      title: 'Global Market & Data Center Daily Radar',
+      status: 'orchestrating',
+      ws: 'default',
+    } as any,
+  });
+
+  broadcast({
+    type: 'event_logged',
+    payload: {
+      taskId,
+      sessionId: taskId,
+      summary: 'proactive_radar_task_created',
+    },
+  });
+
+  void igniteTaskOrchestration(taskId, source);
+
+  return { taskId, status: 'orchestrating' as const };
+}
+
+export async function GET(_request: NextRequest) {
+  try {
+    const result = await createRadarTaskAndIgnite('cron-radar-get');
+    return NextResponse.json({ ok: true, ...result });
+  } catch (error) {
+    console.error('Failed to execute radar GET:', error);
+    return NextResponse.json({ ok: false, error: 'Failed to execute radar' }, { status: 500 });
+  }
+}
+
+export async function POST(_request: NextRequest) {
+  try {
+    const result = await createRadarTaskAndIgnite('cron-radar-post');
+    return NextResponse.json({ ok: true, ...result });
+  } catch (error) {
+    console.error('Failed to execute radar POST:', error);
+    return NextResponse.json({ ok: false, error: 'Failed to execute radar' }, { status: 500 });
+  }
+}

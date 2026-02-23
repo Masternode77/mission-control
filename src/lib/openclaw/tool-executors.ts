@@ -1,0 +1,222 @@
+import { randomUUID } from 'crypto';
+import { load } from 'cheerio';
+import { queryAll, run } from '@/lib/db';
+import { broadcast } from '@/lib/events';
+import { getMissionControlUrl } from '@/lib/config';
+
+type ToolExecContext = {
+  workspaceId?: string;
+  parentTaskId?: string;
+  requesterRoleId?: string;
+};
+
+type SearchRow = {
+  task_id: string;
+  title: string;
+  output_summary: string | null;
+};
+
+function safeStr(v: unknown): string {
+  return String(v ?? '').trim();
+}
+
+function snippet(text: string, keyword: string, max = 900): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  const idx = normalized.toLowerCase().indexOf(keyword.toLowerCase());
+  if (idx < 0) return normalized.slice(0, max);
+  const start = Math.max(0, idx - Math.floor(max / 3));
+  return normalized.slice(start, start + max);
+}
+
+export function getToolArguments(raw: unknown): Record<string, unknown> {
+  if (!raw) return {};
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') return parsed as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+    return {};
+  }
+  if (typeof raw === 'object') return raw as Record<string, unknown>;
+  return {};
+}
+
+export async function searchPastDeliverables(args: Record<string, unknown>, ctx: ToolExecContext): Promise<string> {
+  const keyword = safeStr(args.keyword);
+  if (!keyword) return 'keyword is required';
+
+  const ws = safeStr(ctx.workspaceId || 'default');
+  const rows = queryAll<SearchRow>(
+    `SELECT st.task_id, st.title, sr.output_summary
+     FROM swarm_tasks st
+     JOIN swarm_runs sr ON sr.task_id = st.task_id
+     WHERE (st.ws = ? OR ? = 'all')
+       AND lower(st.status) IN ('completed', 'done')
+       AND lower(COALESCE(sr.output_summary, '')) LIKE lower(?)
+     ORDER BY st.updated_at DESC
+     LIMIT 3`,
+    [ws, ws, `%${keyword}%`]
+  );
+
+  if (!rows.length) return `No completed deliverables found for keyword: ${keyword}`;
+
+  const merged = rows
+    .map((r, i) => `### ${i + 1}. ${r.title} (${r.task_id})\n${snippet(String(r.output_summary || ''), keyword)}`)
+    .join('\n\n');
+
+  return `Found ${rows.length} completed deliverable(s) for "${keyword}".\n\n${merged}`;
+}
+
+export async function spawnSubTask(args: Record<string, unknown>, ctx: ToolExecContext): Promise<string> {
+  const title = safeStr(args.title);
+  const description = safeStr(args.description);
+  const targetRoleId = safeStr(args.target_role_id);
+  if (!title || !description || !targetRoleId) {
+    return 'title, description, and target_role_id are required';
+  }
+
+  const now = new Date().toISOString();
+  const taskId = `task-${randomUUID()}`;
+  const ws = safeStr(ctx.workspaceId || 'default');
+
+  run(
+    `INSERT INTO swarm_tasks (
+      task_id, parent_task_id, ws, title, objective, owner_role_id, priority, status,
+      origin_type, created_by, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'P2', 'intake', 'topdown', ?, ?, ?)`,
+    [taskId, ctx.parentTaskId || null, ws, title, description, targetRoleId, ctx.requesterRoleId || 'tool', now, now]
+  );
+
+  const payload = {
+    id: taskId,
+    task_id: taskId,
+    parent_task_id: ctx.parentTaskId || null,
+    ws,
+    title,
+    objective: description,
+    owner_role_id: targetRoleId,
+    status: 'intake',
+    created_at: now,
+    updated_at: now,
+  };
+
+  broadcast({ type: 'task_created', payload: payload as any });
+  broadcast({
+    type: 'event_logged',
+    payload: {
+      taskId,
+      sessionId: taskId,
+      summary: `task_created via tool: ${title}`,
+    },
+  });
+
+  return `Sub-task created successfully: ${taskId} (${title}) assigned to ${targetRoleId}`;
+}
+
+export async function createSubtasks(args: Record<string, unknown>, ctx: ToolExecContext): Promise<string> {
+  const missionControlUrl = getMissionControlUrl().replace(/\/$/, '');
+  const parentTaskId = safeStr(ctx.parentTaskId);
+  if (!parentTaskId) {
+    return 'create_subtasks requires parent task context (parentTaskId missing)';
+  }
+
+  const ws = safeStr(ctx.workspaceId || 'default');
+  const subtasks = Array.isArray(args.subtasks) ? args.subtasks : [];
+  if (!subtasks.length) {
+    return 'subtasks array is required';
+  }
+
+  const created: Array<{ id: string; title: string; assigned_agent_id: string; execution_order: number }> = [];
+
+  for (let index = 0; index < subtasks.length; index += 1) {
+    const item = subtasks[index];
+    const record = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+
+    const title = safeStr(record.title);
+    const objective = safeStr(record.objective);
+    const assignedAgentId = safeStr(record.assigned_agent_id);
+    const executionOrder = Number(record.execution_order ?? 0);
+
+    if (!title || !objective || !assignedAgentId || !Number.isInteger(executionOrder) || executionOrder < 0) {
+      return `Invalid subtasks[${index}] - requires title/objective/assigned_agent_id/execution_order(non-negative integer)`;
+    }
+
+    const res = await fetch(`${missionControlUrl}/api/swarm/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title,
+        objective,
+        workspace_id: ws,
+        parent_task_id: parentTaskId,
+        assigned_agent_id: assignedAgentId,
+        execution_order: executionOrder,
+      }),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      return `create_subtasks failed at index ${index}: HTTP ${res.status} ${errBody}`;
+    }
+
+    const data = (await res.json()) as { id?: string; title?: string };
+    created.push({
+      id: safeStr(data?.id || `unknown-${index}`),
+      title: safeStr(data?.title || title),
+      assigned_agent_id: assignedAgentId,
+      execution_order: executionOrder,
+    });
+  }
+
+  const summary = created
+    .map((t, i) => `${i + 1}. ${t.id} | ${t.assigned_agent_id} | order=${t.execution_order} | ${t.title}`)
+    .join('\n');
+
+  return `create_subtasks completed (${created.length} created)\n${summary}`;
+}
+
+export async function scrapeAndParseUrl(args: Record<string, unknown>): Promise<string> {
+  const url = safeStr(args.url);
+  if (!/^https?:\/\//i.test(url)) return 'url must be a valid http(s) URL';
+
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'MissionControlBot/1.0 (+scrape_and_parse_url)',
+      Accept: 'text/html,application/xhtml+xml',
+    },
+  });
+
+  if (!res.ok) {
+    return `Failed to fetch URL. status=${res.status}`;
+  }
+
+  const html = await res.text();
+  const $ = load(html);
+  $('script, style, noscript, iframe, svg').remove();
+
+  const title = $('title').first().text().trim();
+  const bodyText = $('body').text().replace(/\s+/g, ' ').trim();
+  const cleaned = bodyText.slice(0, 12000);
+
+  if (!cleaned) return `No parsable body text found at ${url}`;
+
+  return [`URL: ${url}`, title ? `Title: ${title}` : '', '', cleaned].filter(Boolean).join('\n');
+}
+
+export async function executeToolByName(
+  toolName: string,
+  rawArgs: unknown,
+  ctx: ToolExecContext
+): Promise<string> {
+  const args = getToolArguments(rawArgs);
+
+  if (toolName === 'search_past_deliverables') return searchPastDeliverables(args, ctx);
+  if (toolName === 'spawn_sub_task') return spawnSubTask(args, ctx);
+  if (toolName === 'create_subtasks') return createSubtasks(args, ctx);
+  if (toolName === 'scrape_and_parse_url') return scrapeAndParseUrl(args);
+
+  return `Unsupported tool: ${toolName}`;
+}

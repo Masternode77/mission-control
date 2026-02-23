@@ -43,7 +43,7 @@ export interface RegisterSubAgentParams {
  */
 export async function logActivity(params: LogActivityParams): Promise<void> {
   try {
-    const response = await fetch(`${MISSION_CONTROL_URL}/api/tasks/${params.taskId}/activities`, {
+    const response = await fetch(`${MISSION_CONTROL_URL}/api/swarm/tasks/${params.taskId}/activities`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -71,7 +71,7 @@ export async function logActivity(params: LogActivityParams): Promise<void> {
  */
 export async function logDeliverable(params: LogDeliverableParams): Promise<void> {
   try {
-    const response = await fetch(`${MISSION_CONTROL_URL}/api/tasks/${params.taskId}/deliverables`, {
+    const response = await fetch(`${MISSION_CONTROL_URL}/api/swarm/tasks/${params.taskId}/deliverables`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -99,7 +99,7 @@ export async function logDeliverable(params: LogDeliverableParams): Promise<void
  */
 export async function registerSubAgentSession(params: RegisterSubAgentParams): Promise<void> {
   try {
-    const response = await fetch(`${MISSION_CONTROL_URL}/api/tasks/${params.taskId}/subagent`, {
+    const response = await fetch(`${MISSION_CONTROL_URL}/api/swarm/tasks/${params.taskId}/subagent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -150,7 +150,7 @@ export async function completeSubAgentSession(sessionId: string, summary?: strin
  */
 export async function getDeliverables(taskId: string): Promise<any[]> {
   try {
-    const response = await fetch(`${MISSION_CONTROL_URL}/api/tasks/${taskId}/deliverables`);
+    const response = await fetch(`${MISSION_CONTROL_URL}/api/swarm/tasks/${taskId}/deliverables`);
     if (!response.ok) {
       throw new Error(`Failed to fetch deliverables: ${response.statusText}`);
     }
@@ -259,7 +259,7 @@ export async function onSubAgentCompleted(params: {
  *   agentName: 'mission-control-integration-fixes',
  *   summary: 'All integration issues fixed and tested',
  *   deliverables: [
- *     { type: 'file', title: 'Updated dispatch route', path: 'src/app/api/tasks/[id]/dispatch/route.ts' },
+ *     { type: 'file', title: 'Updated dispatch route', path: 'src/app/api/swarm/tasks/[id]/dispatch/route.ts' },
  *     { type: 'file', title: 'Orchestration helper', path: 'src/lib/orchestration.ts' },
  *   ],
  * });

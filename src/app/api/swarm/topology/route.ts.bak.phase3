@@ -1,0 +1,265 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { queryAll, queryOne } from '@/lib/db';
+
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+type TopologyNode = {
+  id: string;
+  type: 'orchestrator' | 'subagent-role';
+  label: string;
+  domain?: string;
+  profile_type?: string;
+  enabled?: boolean;
+  metrics?: {
+    total_runs: number;
+    running_runs: number;
+    completed_runs: number;
+    failed_runs: number;
+  };
+};
+
+type TopologyLink = {
+  id: string;
+  source: string;
+  target: string;
+  handoff_type: string;
+  handoff_count: number;
+  last_handoff_at?: string;
+};
+
+type TopologyResponse = {
+  generated_at: string;
+  nodes: TopologyNode[];
+  links: TopologyLink[];
+  role_signals: Record<string, { progress?: number; risk?: string; rework?: boolean; updated_at?: string }>;
+  command_stream: Array<{ id: string; message: string; type: string; created_at: string }>;
+  hitl: {
+    pending_approvals: number;
+  };
+  stats: {
+    active_runs: number;
+    proactive_open_tasks: number;
+    total_open_tasks: number;
+  };
+};
+
+function parseProgress(text?: string | null): number | undefined {
+  if (!text) return undefined;
+  const m = text.match(/(\d{1,3})%/);
+  if (!m) return undefined;
+  const v = Number(m[1]);
+  if (Number.isNaN(v)) return undefined;
+  return Math.max(0, Math.min(100, v));
+}
+
+function parseRisk(text?: string | null): string | undefined {
+  if (!text) return undefined;
+  if (/WACC/i.test(text)) return 'WACC';
+  if (/risk/i.test(text)) return 'RISK';
+  return undefined;
+}
+
+function parseRework(text?: string | null): boolean {
+  if (!text) return false;
+  return /Supervisor Revision Note|rework/i.test(text);
+}
+
+export async function GET(_request: NextRequest) {
+  try {
+    const swarmTasksExists = queryOne<{ cnt: number }>(
+      `SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='swarm_tasks'`
+    )?.cnt;
+
+    if (!swarmTasksExists) {
+      const fallback: TopologyResponse = {
+        generated_at: new Date().toISOString(),
+        nodes: [
+          {
+            id: 'orchestrator:main',
+            type: 'orchestrator',
+            label: 'Main Orchestrator',
+            metrics: { total_runs: 0, running_runs: 0, completed_runs: 0, failed_runs: 0 }
+          }
+        ],
+        links: [],
+        role_signals: {},
+        command_stream: [],
+        hitl: { pending_approvals: 0 },
+        stats: { active_runs: 0, proactive_open_tasks: 0, total_open_tasks: 0 }
+      };
+      return NextResponse.json(fallback);
+    }
+
+    const roleRows = queryAll<{
+      role_id: string;
+      display_name: string;
+      domain: string;
+      profile_type: string;
+      enabled: number;
+      total_runs: number;
+      running_runs: number;
+      completed_runs: number;
+      failed_runs: number;
+    }>(
+      `
+      SELECT
+        ar.role_id,
+        ar.display_name,
+        ar.domain,
+        ar.profile_type,
+        ar.enabled,
+        COALESCE(COUNT(sr.run_id), 0) as total_runs,
+        COALESCE(SUM(CASE WHEN sr.run_status = 'running' THEN 1 ELSE 0 END), 0) as running_runs,
+        COALESCE(SUM(CASE WHEN sr.run_status = 'completed' THEN 1 ELSE 0 END), 0) as completed_runs,
+        COALESCE(SUM(CASE WHEN sr.run_status IN ('failed','timeout','cancelled') THEN 1 ELSE 0 END), 0) as failed_runs
+      FROM agent_roles ar
+      LEFT JOIN swarm_runs sr ON sr.role_id = ar.role_id
+      GROUP BY ar.role_id, ar.display_name, ar.domain, ar.profile_type, ar.enabled
+      ORDER BY ar.domain, ar.role_id
+      `
+    );
+
+    const linkRows = queryAll<{
+      from_role_id: string;
+      to_role_id: string;
+      handoff_type: string;
+      handoff_count: number;
+      last_handoff_at: string | null;
+    }>(
+      `
+      SELECT
+        from_role_id,
+        to_role_id,
+        handoff_type,
+        COUNT(*) as handoff_count,
+        MAX(created_at) as last_handoff_at
+      FROM swarm_handoffs
+      GROUP BY from_role_id, to_role_id, handoff_type
+      ORDER BY handoff_count DESC, last_handoff_at DESC
+      `
+    );
+
+    const latestRunSignals = queryAll<{ role_id: string; output_summary: string | null; updated_at: string | null }>(
+      `
+      SELECT sr.role_id, sr.output_summary, COALESCE(sr.ended_at, sr.started_at, sr.created_at) as updated_at
+      FROM swarm_runs sr
+      JOIN (
+        SELECT role_id, MAX(COALESCE(ended_at, started_at, created_at)) as latest_at
+        FROM swarm_runs
+        GROUP BY role_id
+      ) t ON t.role_id = sr.role_id AND COALESCE(sr.ended_at, sr.started_at, sr.created_at) = t.latest_at
+      `
+    );
+
+    const pendingApprovals = queryOne<{ c: number }>(
+      `SELECT COUNT(*) as c FROM swarm_approvals WHERE approval_status = 'pending'`
+    )?.c ?? 0;
+
+    const activeRuns = queryOne<{ c: number }>(
+      `SELECT COUNT(*) as c
+       FROM swarm_runs sr
+       JOIN swarm_tasks st ON st.task_id = sr.task_id
+       WHERE sr.run_status = 'running'
+         AND lower(COALESCE(st.status, '')) IN ('in_execution', 'orchestrating')`
+    )?.c ?? 0;
+
+    const proactiveOpenTasks = queryOne<{ c: number }>(
+      `
+      SELECT COUNT(*) as c
+      FROM swarm_tasks
+      WHERE is_proactive = 1
+        AND lower(COALESCE(status,'')) NOT IN ('accepted','rejected','completed','failed')
+      `
+    )?.c ?? 0;
+
+    const totalOpenTasks = queryOne<{ c: number }>(
+      `
+      SELECT COUNT(*) as c
+      FROM swarm_tasks
+      WHERE lower(COALESCE(status,'')) NOT IN ('accepted','rejected','completed','failed')
+      `
+    )?.c ?? 0;
+
+    const commandStream = queryAll<{ id: string; message: string; type: string; created_at: string }>(
+      `
+      SELECT id, message, type, created_at
+      FROM events
+      WHERE type IN ('system','task_assigned','message_sent','task_status_changed')
+      ORDER BY created_at DESC
+      LIMIT 12
+      `
+    );
+
+    const nodes: TopologyNode[] = [
+      {
+        id: 'orchestrator:main',
+        type: 'orchestrator',
+        label: 'Main Orchestrator',
+        metrics: {
+          total_runs: roleRows.reduce((acc, r) => acc + Number(r.total_runs || 0), 0),
+          running_runs: roleRows.reduce((acc, r) => acc + Number(r.running_runs || 0), 0),
+          completed_runs: roleRows.reduce((acc, r) => acc + Number(r.completed_runs || 0), 0),
+          failed_runs: roleRows.reduce((acc, r) => acc + Number(r.failed_runs || 0), 0)
+        }
+      },
+      ...roleRows.map((r) => ({
+        id: `role:${r.role_id}`,
+        type: 'subagent-role' as const,
+        label: r.display_name,
+        domain: r.domain,
+        profile_type: r.profile_type,
+        enabled: Boolean(r.enabled),
+        metrics: {
+          total_runs: Number(r.total_runs || 0),
+          running_runs: Number(r.running_runs || 0),
+          completed_runs: Number(r.completed_runs || 0),
+          failed_runs: Number(r.failed_runs || 0)
+        }
+      }))
+    ];
+
+    const links: TopologyLink[] = linkRows.map((l) => ({
+      id: `${l.from_role_id}->${l.to_role_id}:${l.handoff_type}`,
+      source: `role:${l.from_role_id}`,
+      target: `role:${l.to_role_id}`,
+      handoff_type: l.handoff_type,
+      handoff_count: Number(l.handoff_count || 0),
+      last_handoff_at: l.last_handoff_at ?? undefined
+    }));
+
+    const roleSignals: Record<string, { progress?: number; risk?: string; rework?: boolean; updated_at?: string }> = {};
+    for (const s of latestRunSignals) {
+      roleSignals[`role:${s.role_id}`] = {
+        progress: parseProgress(s.output_summary),
+        risk: parseRisk(s.output_summary),
+        rework: parseRework(s.output_summary),
+        updated_at: s.updated_at ?? undefined,
+      };
+    }
+
+    const response: TopologyResponse = {
+      generated_at: new Date().toISOString(),
+      nodes,
+      links,
+      role_signals: roleSignals,
+      command_stream: commandStream,
+      hitl: {
+        pending_approvals: pendingApprovals
+      },
+      stats: {
+        active_runs: activeRuns,
+        proactive_open_tasks: proactiveOpenTasks,
+        total_open_tasks: totalOpenTasks
+      }
+    };
+
+    return NextResponse.json(response);
+  } catch (error) {
+    console.error('Failed to fetch swarm topology:', error);
+    return NextResponse.json(
+      { error: 'Failed to fetch swarm topology' },
+      { status: 500 }
+    );
+  }
+}

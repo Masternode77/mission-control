@@ -183,4 +183,105 @@ CREATE INDEX IF NOT EXISTS idx_activities_task ON task_activities(task_id, creat
 CREATE INDEX IF NOT EXISTS idx_deliverables_task ON task_deliverables(task_id);
 CREATE INDEX IF NOT EXISTS idx_openclaw_sessions_task ON openclaw_sessions(task_id);
 CREATE INDEX IF NOT EXISTS idx_planning_questions_task ON planning_questions(task_id, sort_order);
+
+-- Swarm roles table
+CREATE TABLE IF NOT EXISTS agent_roles (
+  role_id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  domain TEXT NOT NULL,
+  profile_type TEXT NOT NULL DEFAULT 'virtual',
+  default_agent_id TEXT,
+  prompt_template_ref TEXT,
+  output_schema_version TEXT,
+  version INTEGER NOT NULL DEFAULT 1,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Swarm tasks table
+CREATE TABLE IF NOT EXISTS swarm_tasks (
+  task_id TEXT PRIMARY KEY,
+  parent_task_id TEXT,
+  ws TEXT NOT NULL,
+  title TEXT NOT NULL,
+  objective TEXT,
+  owner_role_id TEXT,
+  priority TEXT NOT NULL DEFAULT 'P2',
+  risk_tier TEXT NOT NULL DEFAULT 'medium',
+  status TEXT NOT NULL,
+  is_proactive INTEGER NOT NULL DEFAULT 0,
+  origin_type TEXT NOT NULL DEFAULT 'topdown',
+  sla_hours INTEGER,
+  execution_order INTEGER NOT NULL DEFAULT 0,
+  context_payload TEXT,
+  source_event TEXT,
+  created_by TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY(parent_task_id) REFERENCES swarm_tasks(task_id),
+  FOREIGN KEY(owner_role_id) REFERENCES agent_roles(role_id)
+);
+
+-- Swarm runs table
+CREATE TABLE IF NOT EXISTS swarm_runs (
+  run_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  role_id TEXT NOT NULL,
+  session_key TEXT,
+  provider_run_id TEXT,
+  run_status TEXT NOT NULL,
+  started_at TEXT,
+  ended_at TEXT,
+  duration_ms INTEGER,
+  output_path TEXT,
+  output_summary TEXT,
+  error_message TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY(task_id) REFERENCES swarm_tasks(task_id),
+  FOREIGN KEY(role_id) REFERENCES agent_roles(role_id)
+);
+
+-- Swarm handoffs
+CREATE TABLE IF NOT EXISTS swarm_handoffs (
+  handoff_id TEXT PRIMARY KEY,
+  from_role_id TEXT NOT NULL,
+  to_role_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  handoff_type TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY(task_id) REFERENCES swarm_tasks(task_id)
+);
+
+-- Swarm approvals
+CREATE TABLE IF NOT EXISTS swarm_approvals (
+  approval_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  gate_reason TEXT,
+  approval_status TEXT NOT NULL DEFAULT 'pending',
+  requested_at TEXT DEFAULT (datetime('now')),
+  decided_at TEXT,
+  decided_by TEXT,
+  decision_note TEXT,
+  FOREIGN KEY(task_id) REFERENCES swarm_tasks(task_id)
+);
+
+-- Swarm MOC links
+CREATE TABLE IF NOT EXISTS swarm_moc_links (
+  link_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  moc_path TEXT NOT NULL,
+  ref_type TEXT NOT NULL DEFAULT 'context',
+  last_synced_at TEXT,
+  FOREIGN KEY(task_id) REFERENCES swarm_tasks(task_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_swarm_tasks_status ON swarm_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_swarm_tasks_priority ON swarm_tasks(priority);
+CREATE INDEX IF NOT EXISTS idx_swarm_tasks_proactive ON swarm_tasks(is_proactive);
+CREATE INDEX IF NOT EXISTS idx_swarm_runs_task ON swarm_runs(task_id);
+CREATE INDEX IF NOT EXISTS idx_swarm_runs_status ON swarm_runs(run_status);
+CREATE INDEX IF NOT EXISTS idx_swarm_handoffs_task ON swarm_handoffs(task_id);
+CREATE INDEX IF NOT EXISTS idx_swarm_approvals_status ON swarm_approvals(approval_status);
+CREATE INDEX IF NOT EXISTS idx_swarm_moc_task ON swarm_moc_links(task_id);
 `;

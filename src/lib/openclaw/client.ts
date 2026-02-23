@@ -354,7 +354,16 @@ export class OpenClawClient extends EventEmitter {
     return this.connecting;
   }
 
-  private handleMessage(data: OpenClawMessage & { type?: string; ok?: boolean; payload?: unknown }): void {
+  private handleMessage(data: OpenClawMessage & { type?: string; event?: string; ok?: boolean; payload?: unknown }): void {
+    // Forward gateway event frames to subscribers (for streaming run observability)
+    if (data.type === 'event' && data.event) {
+      this.emit('gateway_event', {
+        event: data.event,
+        payload: data.payload,
+        seq: (data as Record<string, unknown>).seq,
+      });
+    }
+
     // Handle OpenClaw ResponseFrame format (type: "res")
     if (data.type === 'res' && data.id !== undefined) {
       const requestId = data.id as string | number;
@@ -416,18 +425,34 @@ export class OpenClawClient extends EventEmitter {
     }
 
     const id = crypto.randomUUID();
-    const message = { type: 'req', id, method, params };
+    const timeoutMs = Number((params as Record<string, unknown> | undefined)?.__timeoutMs ?? 30000);
+    const cleanParams = params && '__timeoutMs' in params
+      ? Object.fromEntries(Object.entries(params).filter(([k]) => k !== '__timeoutMs'))
+      : params;
+
+    const sanitizedParams: Record<string, unknown> | undefined = cleanParams
+      ? { ...(cleanParams as Record<string, unknown>) }
+      : undefined;
+
+    if (method === 'chat.send' && sanitizedParams) {
+      const tools = sanitizedParams.tools;
+      const hasUsableTools = Array.isArray(tools) && tools.length > 0;
+      if (!hasUsableTools) {
+        delete sanitizedParams.tools;
+      }
+    }
+
+    const message = { type: 'req', id, method, params: sanitizedParams };
 
     return new Promise((resolve, reject) => {
       this.pendingRequests.set(id, { resolve: resolve as (value: unknown) => void, reject });
 
-      // Timeout after 30 seconds
       setTimeout(() => {
         if (this.pendingRequests.has(id)) {
           this.pendingRequests.delete(id);
-          reject(new Error(`Request timeout: ${method}`));
+          reject(new Error(`Request timeout: ${method} (${timeoutMs}ms)`));
         }
-      }, 30000);
+      }, timeoutMs);
 
       this.ws!.send(JSON.stringify(message));
     });

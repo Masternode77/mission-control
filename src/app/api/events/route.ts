@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { queryAll, run } from '@/lib/db';
+import { broadcast } from '@/lib/events';
 import type { Event } from '@/lib/types';
 
 // GET /api/events - List events (live feed)
@@ -79,6 +80,15 @@ export async function POST(request: NextRequest) {
         now,
       ]
     );
+
+    broadcast({
+      type: 'event_logged',
+      payload: {
+        taskId: body.task_id || '',
+        sessionId: id,
+        summary: body.message,
+      },
+    });
 
     return NextResponse.json({ id, type: body.type, message: body.message, created_at: now }, { status: 201 });
   } catch (error) {

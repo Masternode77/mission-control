@@ -418,7 +418,7 @@ function toRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function toRecordSafe(raw: string): Record<string, unknown> {
+function toRecordSafe(raw: string | null | undefined): Record<string, unknown> {
   if (!raw) return {};
   try {
     const parsed = JSON.parse(raw);

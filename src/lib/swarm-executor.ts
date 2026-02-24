@@ -7,6 +7,7 @@ import { executeToolByName } from '@/lib/openclaw/tool-executors';
 import { sendTelegramReply, sendTelegramMessage } from '@/lib/telegram';
 import { archiveToNotion } from '@/lib/notion-archiver';
 import { createSwarmTracer } from '@/lib/tracer';
+import { classifyIntent, formatIntentForPrompt } from '@/lib/pre-router';
 import fs from 'fs';
 import path from 'path';
 
@@ -518,6 +519,11 @@ export async function executeSwarmRunAsync(params: {
   objective?: string | null;
   subPrompt: string;
 }) {
+  const preRouteIntentInput = `${params.taskTitle || ""}\n${params.objective || ""}\n${params.subPrompt || ""}`;
+  const preRouteIntent = classifyIntent(preRouteIntentInput);
+  logEvent(params.taskId, params.runId, `[PREROUTER] intent=${preRouteIntent.category} score=${preRouteIntent.score}`);
+  const preRouteSystemPrompt = formatIntentForPrompt(preRouteIntent);
+  logEvent(params.taskId, params.runId, `[PREROUTER] metadata=${preRouteSystemPrompt}`);
   const startedAtMs = Date.now();
   const tracer = createSwarmTracer(params.taskId, params.runId);
   const client = getOpenClawClient();
@@ -608,6 +614,9 @@ export async function executeSwarmRunAsync(params: {
 
     const payload = [
       role?.prompt_template_ref || '',
+      '',
+      '# ROUTING',
+      preRouteSystemPrompt,
       '',
       '# TASK',
       `Title: ${params.taskTitle}`,

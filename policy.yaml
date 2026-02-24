@@ -1,24 +1,35 @@
 auto_approve_actions:
   - search_past_deliverables
   - internal_log_read
+  - query_internal_db
 
 hitl_required_actions:
+  - file_write
+  - write_file
+  - create_file
+  - append_file
+  - send_telegram_reply
+  - send_external_api
+  - external_api_call
   - spawn_sub_task
   - create_subtasks
-  - scrape_and_parse_url
-  - send_telegram_reply
+  - webhook_call
   - approval
 
 banned_actions:
   - fetch_data_from_unapproved_domain
+  - fetch_url
   - read_env_file
   - read_dot_env_file
+  - read_environment
+  - read_env
 
 allowed_fetch_domains:
   - localhost
   - 127.0.0.1
   - mission-control
   - mission-control.local
+  - api.mission-control.local
 
 sandbox_rules:
   untrusted_telegram_to_hitl: true

@@ -1,0 +1,57 @@
+{
+  "version": "1.0",
+  "defaults": {
+    "traceFile": "logs/swarm-traces.jsonl",
+    "maxLatencyMs": 30000,
+    "requireHitlGate": true
+  },
+  "scenarios": [
+    {
+      "id": "core-report-success",
+      "name": "정상 보고서 합성",
+      "description": "에이전트가 LLM 호출 후 최종 합성을 성공적으로 완료하고 HITL 게이트를 남겨야 함",
+      "taskId": "EVAL-CORE-REPORT-001",
+      "runId": "EVAL-RUN-CORE-REPORT-001",
+      "expectation": {
+        "expectLlm": true,
+        "requireToolCall": false,
+        "requireSynthesis": true,
+        "requireHitlGate": true,
+        "maxLatencyMs": 30000,
+        "mustBeMaster": false
+      }
+    },
+    {
+      "id": "tool-heavy-computation",
+      "name": "도구 호출 연동 시나리오",
+      "description": "에이전트가 최소 1개 이상의 도구 호출과 최종 합성을 수행하고 HITL 승인 기록을 남겨야 함",
+      "taskId": "EVAL-TOOL-002",
+      "runId": "EVAL-RUN-TOOL-002",
+      "expectation": {
+        "expectLlm": true,
+        "requireToolCall": true,
+        "requireSynthesis": true,
+        "requireHitlGate": true,
+        "maxLatencyMs": 30000,
+        "toolMinCount": 2,
+        "mustBeMaster": false
+      }
+    },
+    {
+      "id": "error-hitl-escalation",
+      "name": "오류 및 HITL 에스컬레이션",
+      "description": "오류 상황에서 synthesis 실패가 기록되고 HITL 승인 대기 기록은 남아야 함",
+      "taskId": "EVAL-ERR-003",
+      "runId": "EVAL-RUN-ERR-003",
+      "expectation": {
+        "expectLlm": true,
+        "requireToolCall": false,
+        "requireSynthesis": false,
+        "requireHitlGate": true,
+        "expectSynthesisSuccess": false,
+        "maxLatencyMs": 30000,
+        "mustBeMaster": false
+      }
+    }
+  ]
+}

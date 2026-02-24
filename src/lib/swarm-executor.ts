@@ -6,6 +6,7 @@ import { CORE_SWARM_TOOLS } from '@/lib/openclaw/skills';
 import { executeToolByName } from '@/lib/openclaw/tool-executors';
 import { sendTelegramReply, sendTelegramMessage } from '@/lib/telegram';
 import { archiveToNotion } from '@/lib/notion-archiver';
+import { createSwarmTracer } from '@/lib/tracer';
 
 const MAX_WAIT_MS = 600000; // 10 minutes streaming hard kill-switch
 const HITL_REVIEW_WAIT_MS = 86400000; // 24 hours (do not auto-regress HITL state)
@@ -339,6 +340,7 @@ export async function executeSwarmRunAsync(params: {
   subPrompt: string;
 }) {
   const startedAtMs = Date.now();
+  const tracer = createSwarmTracer(params.taskId, params.runId);
   const client = getOpenClawClient();
 
   let finalMarkdown: string | null = null;
@@ -409,8 +411,8 @@ export async function executeSwarmRunAsync(params: {
     logEvent(params.taskId, params.runId, `[DISPATCH_DETAIL] Monica told ${params.roleId}: ${trim(params.subPrompt, 280)}`);
     logEvent(params.taskId, params.runId, `[THINKING] ${params.roleId} started execution`);
 
-    const role = queryOne<{ prompt_template_ref: string | null }>(
-      'SELECT prompt_template_ref FROM agent_roles WHERE role_id = ?',
+    const role = queryOne<{ prompt_template_ref: string | null; default_agent_id: string | null }>(
+      'SELECT prompt_template_ref, default_agent_id FROM agent_roles WHERE role_id = ?',
       [params.roleId]
     );
 
@@ -443,7 +445,20 @@ export async function executeSwarmRunAsync(params: {
 
     client.on('gateway_event', onGatewayEvent);
 
+    const llmCallStartedAt = new Date().toISOString();
     let sendRes: any;
+    let usedModel = undefined as string | undefined;
+    let initialSendSuccess = false;
+    let initialSendError: unknown = null;
+    try {
+      usedModel = role?.default_agent_id
+        ? queryOne<{ model: string | null }>(
+            'SELECT model FROM agents WHERE id = ?',
+            [role.default_agent_id]
+          )?.model || undefined
+        : undefined;
+    } catch {}
+
     try {
       sendRes = await client.call('chat.send', {
         sessionKey: params.sessionKey,
@@ -451,22 +466,26 @@ export async function executeSwarmRunAsync(params: {
         idempotencyKey: `swarm-exec-${params.taskId}-${Date.now()}`,
         __timeoutMs: 86400000,
       });
-    } catch (initialSendError) {
-      const reason = initialSendError instanceof Error ? initialSendError.message : String(initialSendError);
-      const report = errorReportMarkdown(params.taskTitle, params.roleId, reason);
-      const result = failRunAndTaskSafely({
-        taskId: params.taskId,
-        runId: params.runId,
-        reason,
-        report,
-        preserveHitlReview: true,
+      initialSendSuccess = true;
+    } catch (err) {
+      initialSendSuccess = false;
+      initialSendError = err;
+      throw err;
+    } finally {
+      tracer.logSpan({
+        spanType: 'llm_call',
+        spanName: 'chat.send.initial',
+        model: usedModel || undefined,
+        success: initialSendSuccess,
+        latencyMs: Date.now() - Date.parse(llmCallStartedAt),
+        startedAt: llmCallStartedAt,
+        endedAt: new Date().toISOString(),
+        metadata: {
+          method: 'llm',
+          ...(initialSendError ? { error: initialSendError instanceof Error ? initialSendError.message : String(initialSendError) } : {}),
+        },
       });
-
-      logEvent(params.taskId, params.runId, `[EXECUTOR_ERROR] initial chat.send failed: ${reason}`);
-      broadcast({ type: 'task_updated', payload: { id: params.taskId, status: result.taskStatus } as any });
-      return;
     }
-
     streamRunId = String(sendRes?.runId || '');
     if (!streamRunId) {
       throw new Error('chat.send did not return runId');
@@ -482,11 +501,38 @@ export async function executeSwarmRunAsync(params: {
           throw new Error(`tool loop limit exceeded (${MAX_TOOL_LOOP})`);
         }
 
-        const toolResult = await executeToolByName(next.name, next.arguments, {
-          workspaceId: 'default',
-          parentTaskId: params.taskId,
-          requesterRoleId: params.roleId,
-        });
+        const toolStartedAt = new Date().toISOString();
+        let toolResult: unknown = null;
+        let toolSucceeded = false;
+        let toolError: unknown = null;
+
+        try {
+          toolResult = await executeToolByName(next.name, next.arguments, {
+            workspaceId: 'default',
+            parentTaskId: params.taskId,
+            requesterRoleId: params.roleId,
+          });
+          toolSucceeded = true;
+        } catch (err) {
+          toolError = err;
+          throw err;
+        } finally {
+          tracer.logSpan({
+            spanType: 'tool_call',
+            spanName: next.name,
+            toolName: next.name,
+            toolArguments: next.arguments,
+            success: toolSucceeded,
+            latencyMs: Date.now() - Date.parse(toolStartedAt),
+            startedAt: toolStartedAt,
+            endedAt: new Date().toISOString(),
+            costTokens: undefined,
+            metadata: {
+              tool_call_id: next.id,
+              ...(toolError ? { error: toolError instanceof Error ? toolError.message : String(toolError) } : {}),
+            },
+          });
+        }
 
         run(
           `INSERT INTO events (id, type, task_id, message, metadata, created_at)
@@ -524,6 +570,15 @@ export async function executeSwarmRunAsync(params: {
     if (!finalMarkdown) throw new Error(`timeout exceeded ${MAX_WAIT_MS}ms while waiting streaming final`);
 
     const cleanMarkdown = stripHandoffLeak(finalMarkdown);
+    const isMaster = isMasterReportTask(params.taskTitle);
+
+    tracer.logSpan({
+      spanType: 'synthesis',
+      spanName: params.taskTitle,
+      success: true,
+      latencyMs: Date.now() - startedAtMs,
+      metadata: { is_master: isMaster }
+    });
 
     const endedAt = new Date().toISOString();
     run(
@@ -538,7 +593,20 @@ export async function executeSwarmRunAsync(params: {
       logEvent(params.taskId, params.runId, '[DELIVERABLE_SAVED] Report finalized and saved.');
     }
 
-    const isMaster = isMasterReportTask(params.taskTitle);
+    if (!isMaster) {
+      tracer.logSpan({
+        spanType: 'hitl_gate',
+        spanName: 'execution_to_hitl_review',
+        approver: 'pending',
+        success: true,
+        startedAt: endedAt,
+        endedAt: new Date().toISOString(),
+        metadata: {
+          reason: 'execution_completed_needs_review',
+        },
+      });
+    }
+
     const nextTaskStatus = isMaster ? 'completed' : 'hitl_review';
 
     run(`UPDATE swarm_tasks SET status = ?, updated_at = ? WHERE task_id = ?`, [nextTaskStatus, endedAt, params.taskId]);
@@ -568,6 +636,18 @@ export async function executeSwarmRunAsync(params: {
     broadcast({ type: 'task_updated', payload: { id: params.taskId, status: nextTaskStatus } as any });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
+
+    tracer.logSpan({
+      spanType: 'synthesis',
+      spanName: params.taskTitle,
+      success: false,
+      latencyMs: Date.now() - startedAtMs,
+      metadata: {
+        error: reason,
+        phase: 'execution_error',
+      },
+    });
+
     const report = errorReportMarkdown(params.taskTitle, params.roleId, reason);
     const result = failRunAndTaskSafely({
       taskId: params.taskId,

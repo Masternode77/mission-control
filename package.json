@@ -16,7 +16,9 @@
     "test:e2e:core": "node tests/e2e/core-flow.js",
     "test:policy:matrix": "node tests/policy/matrix.js",
     "ci:gate": "npm run build && npm run test:redteam && npm run test:policy:matrix && npm run test:e2e:policy-reject && npm run test:e2e:core",
-    "test:e2e:policy-reject": "node tests/e2e/policy-reject-flow.js"
+    "test:e2e:policy-reject": "node tests/e2e/policy-reject-flow.js",
+    "deploy:canary": "node scripts/deploy-canary.js",
+    "rollback": "node scripts/rollback-last-good.js"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^17.0.0",

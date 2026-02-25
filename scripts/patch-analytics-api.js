@@ -1,4 +1,9 @@
-import { NextResponse } from 'next/server';
+const fs = require('fs');
+const path = require('path');
+
+const routePath = path.resolve(__dirname, '..', 'src', 'app', 'api', 'observability', 'route.ts');
+
+const nextContent = `import { NextResponse } from 'next/server';
 import { createReadStream, promises as fs } from 'fs';
 import { createInterface } from 'readline';
 import path from 'path';
@@ -263,3 +268,8 @@ export async function GET() {
   const rows = await readTraceRows(tracePath);
   return NextResponse.json(buildMetrics(rows));
 }
+`;
+
+fs.writeFileSync(routePath, nextContent, 'utf8');
+console.log('[patch-analytics-api] patched: ' + routePath);
+process.exit(0);

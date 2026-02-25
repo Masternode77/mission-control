@@ -17,5 +17,8 @@ allowed_fetch_domains:
   - mission-control.local
   - api.mission-control.local
 
+  - equinix.com
+  - digitalrealty.com
+  - actis.com
 sandbox_rules:
   untrusted_telegram_to_hitl: true

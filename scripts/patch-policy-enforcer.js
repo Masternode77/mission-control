@@ -186,7 +186,7 @@ function policyBlockTemplate() {
     "    return { decision: 'auto_approve', reason: `AUTO_APPROVE: ${name}` };",
     '  }',
     '',
-    "  return { decision: 'auto_approve', reason: `AUTO_APPROVE: default ${name}` };",
+    "  return { decision: 'hitl_required', reason: `HITL_REQUIRED: default-deny unknown action ${name}` };",
     '}',
     '',
     'function enterPolicyGate(params: { taskId: string; runId: string; toolCallId: string; toolName: string; reason: string }) {',

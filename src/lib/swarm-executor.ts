@@ -490,7 +490,52 @@ function classifyToolAction(toolName: string, argsRaw: unknown, ctx: PolicyConte
     return { decision: 'auto_approve', reason: 'AUTO_APPROVE: ' + name };
   }
 
-  return { decision: 'auto_approve', reason: 'AUTO_APPROVE: default ' + name };
+  return { decision: 'hitl_required', reason: 'HITL_REQUIRED: default-deny unknown action' + (name ? ' ' + name : '') };
+}
+
+
+function estimateTokensFromText(text: unknown): number {
+  const raw = typeof text === 'string' ? text : String(text ?? '');
+  const normalized = raw.replace(/\s+/g, ' ').trim();
+  if (!normalized) return 0;
+  return Math.max(1, Math.ceil(normalized.length / 4));
+}
+
+function extractTotalTokensFromGatewayEvent(value: unknown, depth = 0): number | undefined {
+  if (depth > 6 || value == null) return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = extractTotalTokensFromGatewayEvent(item, depth + 1);
+      if (typeof hit === 'number' && Number.isFinite(hit)) return hit;
+    }
+    return undefined;
+  }
+  if (typeof value !== 'object') return undefined;
+  const obj = value as Record<string, unknown>;
+  const direct = extractTotalTokensFromUsage(obj);
+  if (typeof direct === 'number' && Number.isFinite(direct) && direct >= 0) return direct;
+  for (const key of Object.keys(obj)) {
+    const hit = extractTotalTokensFromGatewayEvent(obj[key], depth + 1);
+    if (typeof hit === 'number' && Number.isFinite(hit)) return hit;
+  }
+  return undefined;
+}
+
+function extractTotalTokensFromUsage(response: unknown): number | undefined {
+  const r = (response && typeof response === "object") ? (response as Record<string, unknown>) : {};
+  const usage = (r.usage && typeof r.usage === "object") ? (r.usage as Record<string, unknown>) : {};
+  const total = Number(usage.total_tokens);
+  if (Number.isFinite(total) && total >= 0) return total;
+  const prompt = Number(usage.prompt_tokens ?? usage.input_tokens ?? usage.promptTokenCount ?? usage.inputTokenCount ?? 0);
+  const completion = Number(usage.completion_tokens ?? usage.output_tokens ?? usage.candidates_token_count ?? usage.outputTokenCount ?? 0);
+  const merged = (Number.isFinite(prompt) ? prompt : 0) + (Number.isFinite(completion) ? completion : 0);
+  if (merged > 0) return merged;
+  // Some wrappers put usage in nested result payloads
+  const result = (r.result && typeof r.result === "object") ? (r.result as Record<string, unknown>) : {};
+  const nestedUsage = (result.usage && typeof result.usage === "object") ? (result.usage as Record<string, unknown>) : {};
+  const nestedTotal = Number(nestedUsage.total_tokens);
+  if (Number.isFinite(nestedTotal) && nestedTotal >= 0) return nestedTotal;
+  return undefined;
 }
 
 function enterPolicyGate(params: { taskId: string; runId: string; toolName: string; toolCallId: string; reason: string }) {
@@ -532,6 +577,7 @@ export async function executeSwarmRunAsync(params: {
   let ended = false;
   let failedReason: string | null = null;
   let streamRunId: string | null = null;
+  let streamUsageTotalTokens: number | undefined = undefined;
 
   const seenToolCalls = new Set<string>();
   const pendingToolCalls: ToolCallCandidate[] = [];
@@ -546,6 +592,11 @@ export async function executeSwarmRunAsync(params: {
     if (!eventName) return;
 
     if (streamRunId && payload.runId !== streamRunId) return;
+
+    const eventUsageTokens = extractTotalTokensFromGatewayEvent(evt) ?? extractTotalTokensFromGatewayEvent(payload);
+    if (typeof eventUsageTokens === 'number' && Number.isFinite(eventUsageTokens)) {
+      streamUsageTotalTokens = eventUsageTokens;
+    }
 
     const discovered = extractToolCalls(payload);
     for (const tc of discovered) {
@@ -635,6 +686,7 @@ export async function executeSwarmRunAsync(params: {
 
     const llmCallStartedAt = new Date().toISOString();
     let sendRes: any;
+    let sendResTotalTokens: number | undefined = undefined;
     let usedModel = undefined as string | undefined;
     let initialSendSuccess = false;
     let initialSendError: unknown = null;
@@ -654,6 +706,7 @@ export async function executeSwarmRunAsync(params: {
         idempotencyKey: `swarm-exec-${params.taskId}-${Date.now()}`,
         __timeoutMs: 86400000,
       });
+      sendResTotalTokens = extractTotalTokensFromUsage(sendRes);
       initialSendSuccess = true;
     } catch (err) {
       initialSendSuccess = false;
@@ -668,6 +721,7 @@ export async function executeSwarmRunAsync(params: {
         latencyMs: Date.now() - Date.parse(llmCallStartedAt),
         startedAt: llmCallStartedAt,
         endedAt: new Date().toISOString(),
+        costTokens: sendResTotalTokens,
         metadata: {
           method: 'llm',
           ...(initialSendError ? { error: initialSendError instanceof Error ? initialSendError.message : String(initialSendError) } : {}),
@@ -801,6 +855,27 @@ export async function executeSwarmRunAsync(params: {
 
     if (failedReason) throw new Error(failedReason);
     if (!finalMarkdown) throw new Error(`timeout exceeded ${MAX_WAIT_MS}ms while waiting streaming final`);
+
+    const finalizedTotalTokens =
+      (typeof streamUsageTotalTokens === 'number' && Number.isFinite(streamUsageTotalTokens))
+        ? streamUsageTotalTokens
+        : (estimateTokensFromText(payload) + estimateTokensFromText(finalMarkdown));
+
+    tracer.logSpan({
+      spanType: 'llm_call',
+      spanName: 'chat.send.usage.final',
+      model: usedModel || undefined,
+      success: true,
+      costTokens: finalizedTotalTokens,
+      latencyMs: Date.now() - Date.parse(llmCallStartedAt),
+      startedAt: llmCallStartedAt,
+      endedAt: new Date().toISOString(),
+      metadata: {
+        method: 'llm',
+        source: (typeof streamUsageTotalTokens === 'number' && Number.isFinite(streamUsageTotalTokens)) ? 'gateway_event_or_final_payload' : 'estimated_from_prompt_and_final_text',
+        run_id: streamRunId || undefined,
+      },
+    });
 
     const cleanMarkdown = stripHandoffLeak(finalMarkdown);
     const isMaster = isMasterReportTask(params.taskTitle);

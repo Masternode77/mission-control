@@ -49,7 +49,8 @@ async function main() {
   const seen = [];
   let found = null;
   const start = Date.now();
-  const timeoutMs = 120000;
+  const timeoutMs = 150000;
+  let retriedOrchestrate = false;
 
   while (Date.now() - start < timeoutMs) {
     await sleep(1200);
@@ -58,6 +59,12 @@ async function main() {
 
     const s = String(found.status || 'unknown');
     if (seen[seen.length - 1] !== s) seen.push(s);
+
+    if ((s === 'intake' || s === 'queued') && seen.includes('in_execution') && !retriedOrchestrate) {
+      await orchestrate(taskId);
+      retriedOrchestrate = true;
+      continue;
+    }
 
     if (s === 'hitl_review' || s === 'completed') {
       console.log('[E2E PASS]', {

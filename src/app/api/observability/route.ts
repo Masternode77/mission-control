@@ -41,6 +41,13 @@ type TokenAgg = {
   };
 };
 
+type TokenCoverageAgg = {
+  totalTokens: number;
+  exactTokens: number;
+  estimatedTokens: number;
+  exactCoveragePct: number;
+};
+
 type ErrorRatePoint = {
   bucket: string;
   period: 'hour' | 'day';
@@ -167,7 +174,7 @@ async function readTraceRows(tracePath: string): Promise<TraceRow[]> {
 
 function buildMetrics(rows: TraceRow[]) {
   const tokenBuckets = new Map<string, TokenAgg>();
-  const hourlyKst = new Map<string, { total: number; failed: number; tokenSum: number }>();
+  const hourlyKst = new Map<string, { total: number; failed: number; tokenSum: number; exactTokens: number; estimatedTokens: number }>();
   const daily = new Map<string, { total: number; failed: number }>();
 
   for (const row of rows) {
@@ -181,11 +188,17 @@ function buildMetrics(rows: TraceRow[]) {
     const day = dayBucketFromMs(tsMs);
     const tokenCost = Number.isFinite(Number(row.cost_tokens ?? 0)) ? Number(row.cost_tokens ?? 0) : 0;
 
-    const hourState = hourlyKst.get(hour) || { total: 0, failed: 0, tokenSum: 0 };
+    const hourState = hourlyKst.get(hour) || { total: 0, failed: 0, tokenSum: 0, exactTokens: 0, estimatedTokens: 0 };
     const dayState = daily.get(day) || { total: 0, failed: 0 };
 
     hourState.total += 1;
     hourState.tokenSum += tokenCost;
+    const tokenSource = String(((row.meta || {}) as Record<string, unknown>).token_source || '').toLowerCase();
+    const tokenEstimated = Boolean(((row.meta || {}) as Record<string, unknown>).token_estimated === true) || tokenSource === 'estimated';
+    if (tokenCost > 0) {
+      if (tokenEstimated) hourState.estimatedTokens += tokenCost;
+      else hourState.exactTokens += tokenCost;
+    }
     dayState.total += 1;
 
     if (isFailure) {
@@ -233,6 +246,18 @@ function buildMetrics(rows: TraceRow[]) {
 
   const totalSpans = rows.length || 1;
   const failed = rows.reduce((acc, row) => acc + (row.success === false ? 1 : 0), 0);
+  const tokenCoverage: TokenCoverageAgg = (() => {
+    let totalTokens = 0;
+    let exactTokens = 0;
+    let estimatedTokens = 0;
+    for (const state of Array.from(hourlyKst.values())) {
+      totalTokens += state.tokenSum;
+      exactTokens += state.exactTokens;
+      estimatedTokens += state.estimatedTokens;
+    }
+    const exactCoveragePct = totalTokens > 0 ? Number(((exactTokens / totalTokens) * 100).toFixed(2)) : 0;
+    return { totalTokens, exactTokens, estimatedTokens, exactCoveragePct };
+  })();
 
   return {
     aggregate: {
@@ -240,19 +265,24 @@ function buildMetrics(rows: TraceRow[]) {
       totalSpanCount: rows.length,
       totalFailedSpanCount: failed,
       globalErrorRate: failed / totalSpans,
+      tokenCoverage,
     },
     timelines: {
       hourly: hourlySeries,
       day: dailySeries,
     },
     hourlyKst: hourlySeries.map((point) => {
-      const state = hourlyKst.get(point.bucket) || { total: 0, failed: 0, tokenSum: 0 };
+      const state = hourlyKst.get(point.bucket) || { total: 0, failed: 0, tokenSum: 0, exactTokens: 0, estimatedTokens: 0 };
+      const exactCoveragePct = state.tokenSum > 0 ? Number(((state.exactTokens / state.tokenSum) * 100).toFixed(2)) : 0;
       return {
         bucket: point.bucket,
         totalAttempts: state.total,
         failedAttempts: state.failed,
         errorRatePct: state.total > 0 ? Number(((state.failed / state.total) * 100).toFixed(2)) : 0,
         totalTokens: state.tokenSum,
+        exactTokens: state.exactTokens,
+        estimatedTokens: state.estimatedTokens,
+        exactCoveragePct,
       };
     }),
   };

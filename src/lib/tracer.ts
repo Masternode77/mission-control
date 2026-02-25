@@ -4,6 +4,11 @@ import { dirname } from 'path';
 
 type SpanType = 'llm_call' | 'tool_call' | 'hitl_gate' | 'synthesis';
 
+type TraceMeta = Record<string, unknown> & {
+  token_source?: 'exact' | 'estimated' | string;
+  token_estimated?: boolean;
+};
+
 type SpanLog = {
   span_type: SpanType;
   task_id: string;
@@ -21,7 +26,7 @@ type SpanLog = {
   ended_at: string | null;
   hitl_started_at: string | null;
   hitl_ended_at: string | null;
-  meta: Record<string, unknown>;
+  meta: TraceMeta;
   logged_at: string;
 };
 
@@ -39,7 +44,7 @@ interface TraceSpanInput {
   endedAt?: string;
   hitlStartedAt?: string;
   hitlEndedAt?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: TraceMeta;
 }
 
 interface TraceLogger {
@@ -108,7 +113,7 @@ function buildJsonlRow(entry: {
   endedAt?: string;
   hitlStartedAt?: string;
   hitlEndedAt?: string;
-  meta?: Record<string, unknown>;
+  meta?: TraceMeta;
 }): SpanLog {
   return {
     trace_id: entry.traceId,

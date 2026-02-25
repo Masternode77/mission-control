@@ -856,10 +856,13 @@ export async function executeSwarmRunAsync(params: {
     if (failedReason) throw new Error(failedReason);
     if (!finalMarkdown) throw new Error(`timeout exceeded ${MAX_WAIT_MS}ms while waiting streaming final`);
 
-    const finalizedTotalTokens =
-      (typeof streamUsageTotalTokens === 'number' && Number.isFinite(streamUsageTotalTokens))
-        ? streamUsageTotalTokens
-        : (estimateTokensFromText(payload) + estimateTokensFromText(finalMarkdown));
+    const tokenSource = (typeof streamUsageTotalTokens === 'number' && Number.isFinite(streamUsageTotalTokens))
+      ? 'exact'
+      : 'estimated';
+    const tokenEstimated = tokenSource !== 'exact';
+    const finalizedTotalTokens = tokenEstimated
+      ? (estimateTokensFromText(payload) + estimateTokensFromText(finalMarkdown))
+      : (streamUsageTotalTokens ?? 0);
 
     tracer.logSpan({
       spanType: 'llm_call',
@@ -872,7 +875,9 @@ export async function executeSwarmRunAsync(params: {
       endedAt: new Date().toISOString(),
       metadata: {
         method: 'llm',
-        source: (typeof streamUsageTotalTokens === 'number' && Number.isFinite(streamUsageTotalTokens)) ? 'gateway_event_or_final_payload' : 'estimated_from_prompt_and_final_text',
+        source: tokenEstimated ? 'estimated_from_prompt_and_final_text' : 'gateway_event_or_final_payload',
+        token_source: tokenSource,
+        token_estimated: tokenEstimated,
         run_id: streamRunId || undefined,
       },
     });

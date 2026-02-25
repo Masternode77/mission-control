@@ -22,3 +22,19 @@ allowed_fetch_domains:
   - actis.com
 sandbox_rules:
   untrusted_telegram_to_hitl: true
+
+
+tenant_isolation: true
+
+role_permissions:
+  admin:
+    - read
+    - write
+    - orchestrate
+    - approve
+  analyst:
+    - read
+    - write
+    - orchestrate
+  guest:
+    - read

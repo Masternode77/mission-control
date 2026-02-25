@@ -467,6 +467,29 @@ function isAllowedDomain(url: string, allowed: string[]): boolean {
   }
 }
 
+function enforceTenantIsolationForTask(taskId: string): {ok: boolean; reason?: string; taskTenant?: string; requesterTenant?: string} {
+  try {
+    const row = queryOne<{ tenant_id: string | null; source_event: string | null; metadata: string | null }>('SELECT tenant_id, source_event, metadata FROM swarm_tasks WHERE task_id = ?', [taskId]);
+    const taskTenant = String(row?.tenant_id || 'default').trim() || 'default';
+    const source = toRecordSafe(row?.source_event || null);
+    const metadata = toRecordSafe(row?.metadata || null);
+    const sourceMeta = toRecord(source['metadata']);
+    const requesterTenant = String(
+      source['tenant_id'] ||
+      sourceMeta['tenant_id'] ||
+      metadata['tenant_id'] ||
+      process.env.REQUEST_TENANT_ID ||
+      'default'
+    ).trim() || 'default';
+    if (requesterTenant !== taskTenant) {
+      return { ok: false, reason: 'TENANT_ISOLATION_BLOCK', taskTenant, requesterTenant };
+    }
+    return { ok: true, taskTenant, requesterTenant };
+  } catch {
+    return { ok: false, reason: 'TENANT_ISOLATION_CHECK_FAILED' };
+  }
+}
+
 function classifyToolAction(toolName: string, argsRaw: unknown, ctx: PolicyContext): { decision: PolicyDecision; reason: string } {
   const name = String(toolName || '').trim().toLowerCase();
   const args = toRecordSafe(typeof argsRaw === 'string' ? argsRaw : JSON.stringify(argsRaw));
@@ -744,6 +767,27 @@ export async function executeSwarmRunAsync(params: {
         }
 
         const toolStartedAt = new Date().toISOString();
+        const tenantGuard = enforceTenantIsolationForTask(params.taskId);
+        if (!tenantGuard.ok) {
+          tracer.logSpan({
+            spanType: 'tool_call',
+            spanName: next.name,
+            toolName: next.name,
+            toolArguments: next.arguments,
+            success: false,
+            latencyMs: Date.now() - Date.parse(toolStartedAt),
+            startedAt: toolStartedAt,
+            endedAt: new Date().toISOString(),
+            metadata: {
+              tool_call_id: next.id,
+              policy_decision: 'banned',
+              policy_reason: tenantGuard.reason || 'TENANT_ISOLATION_BLOCK',
+              tenant_task: tenantGuard.taskTenant,
+              tenant_requester: tenantGuard.requesterTenant,
+            },
+          });
+          throw new Error('POLICY_BLOCKED: TENANT_ISOLATION_BLOCK');
+        }
         const policyContext = getTaskPolicyContext(params.taskId);
         const policyDecision = classifyToolAction(next.name, next.arguments, policyContext);
         if (policyDecision.decision === 'banned') {

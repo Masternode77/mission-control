@@ -10,8 +10,8 @@ async function createTask() {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      title: `[E2E] core-flow ${new Date().toISOString()}`,
-      description: 'E2E core flow validation',
+      title: `[E2E] core-flow deep-track ${new Date().toISOString()}`,
+      description: 'E2E deep tracking until terminal workflow status',
       workspace_id: 'default',
       priority: 'normal',
       assigned_agent_id: 'MC-MAIN',
@@ -35,7 +35,7 @@ async function fetchTask(taskId) {
   const res = await fetch(`${BASE_URL}/api/swarm/tasks?workspace_id=default`);
   if (!res.ok) throw new Error(`fetchTask list failed: ${res.status}`);
   const arr = await res.json();
-  return arr.find((t) => t.id === taskId);
+  return arr.find((t) => t.id === taskId) || null;
 }
 
 async function main() {
@@ -46,23 +46,32 @@ async function main() {
   const routed = await orchestrate(taskId);
   if (!routed.ok) throw new Error('orchestrate response not ok');
 
+  const seen = [];
   let found = null;
-  for (let i = 0; i < 30; i++) {
-    await sleep(1000);
+  const start = Date.now();
+  const timeoutMs = 120000;
+
+  while (Date.now() - start < timeoutMs) {
+    await sleep(1200);
     found = await fetchTask(taskId);
-    if (found && ['in_execution', 'hitl_review', 'completed'].includes(found.status)) break;
+    if (!found) continue;
+
+    const s = String(found.status || 'unknown');
+    if (seen[seen.length - 1] !== s) seen.push(s);
+
+    if (s === 'hitl_review' || s === 'completed') {
+      console.log('[E2E PASS]', {
+        taskId,
+        finalStatus: s,
+        seenStatuses: seen,
+        owner: found.assigned_agent?.id || 'unknown',
+        elapsedMs: Date.now() - start,
+      });
+      return;
+    }
   }
 
-  if (!found) throw new Error('task not found after orchestrate');
-  if (!['in_execution', 'hitl_review', 'completed'].includes(found.status)) {
-    throw new Error(`unexpected status: ${found.status}`);
-  }
-
-  console.log('[E2E PASS]', {
-    taskId,
-    status: found.status,
-    owner: found.assigned_agent?.id || 'unknown',
-  });
+  throw new Error(`timeout waiting terminal state; last=${found ? found.status : 'not_found'} seen=${seen.join(' -> ')}`);
 }
 
 main().catch((e) => {

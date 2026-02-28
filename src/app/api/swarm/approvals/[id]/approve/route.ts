@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { broadcast } from '@/lib/events';
 import { queryOne, run } from '@/lib/db';
+import { sendTaskStatusWebhooks } from '@/lib/webhook-notifier';
 
 export const dynamic = 'force-dynamic';
 
@@ -65,7 +66,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       [uuidv4(), `[HITL] ${task.task_id} approved and archived output: ${path.basename(filePath)}`, now]
     );
 
+    broadcast({ type: 'task_updated', payload: { id: task.task_id, status: 'completed' } as any });
     broadcast({ type: 'event_logged', payload: { taskId: task.task_id, sessionId: id, summary: 'hitl_approved' } });
+
+    void sendTaskStatusWebhooks({
+      taskId: task.task_id,
+      title: task.title,
+      status: 'completed',
+      approvalId: id,
+      source: 'hitl_approve',
+    });
 
     return NextResponse.json({ ok: true, task_id: task.task_id, status: 'completed', file_path: filePath });
   } catch (error) {

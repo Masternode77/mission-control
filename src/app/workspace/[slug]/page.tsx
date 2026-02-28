@@ -13,6 +13,7 @@ import { useMissionControl } from '@/lib/store';
 import { debug } from '@/lib/debug';
 import { useGlobalSSE } from '@/providers/SSEProvider';
 import { SwarmControlRoom } from '@/components/SwarmControlRoom';
+import { ObservabilityDashboard } from '@/components/ObservabilityDashboard';
 import type { Workspace } from '@/lib/types';
 
 export default function WorkspacePage() {
@@ -31,7 +32,7 @@ export default function WorkspacePage() {
   } = useMissionControl();
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [activeView, setActiveView] = useState<'swarm' | 'queue'>('swarm');
+  const [activeView, setActiveView] = useState<'swarm' | 'queue' | 'analytics'>('swarm');
   const [notFound, setNotFound] = useState(false);
   const { connected, sequence, lastEvent } = useGlobalSSE();
   const sseDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -197,21 +198,29 @@ export default function WorkspacePage() {
 
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="px-4 py-2 border-b border-mc-border bg-mc-bg-secondary flex items-center gap-2">
-            <button
-              onClick={() => setActiveView('swarm')}
-              className={`px-3 py-1.5 rounded text-xs ${activeView === 'swarm' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/50' : 'bg-mc-bg-tertiary text-mc-text-secondary border border-mc-border'}`}
+          <button
+            onClick={() => setActiveView('swarm')}
+            className={`px-3 py-1.5 rounded text-xs ${activeView === 'swarm' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/50' : 'bg-mc-bg-tertiary text-mc-text-secondary border border-mc-border'}`
+            }
             >
               Swarm Topology
             </button>
             <button
-              onClick={() => setActiveView('queue')}
-              className={`px-3 py-1.5 rounded text-xs ${activeView === 'queue' ? 'bg-mc-accent/20 text-mc-accent border border-mc-accent/50' : 'bg-mc-bg-tertiary text-mc-text-secondary border border-mc-border'}`}
+            onClick={() => setActiveView('queue')}
+            className={`px-3 py-1.5 rounded text-xs ${activeView === 'queue' ? 'bg-mc-accent/20 text-mc-accent border border-mc-accent/50' : 'bg-mc-bg-tertiary text-mc-text-secondary border border-mc-border'}`
+            }
             >
               Queue View
             </button>
+            <button
+            onClick={() => setActiveView('analytics')}
+            className={`px-3 py-1.5 rounded text-xs ${activeView === 'analytics' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50' : 'bg-mc-bg-tertiary text-mc-text-secondary border border-mc-border'}`
+            }
+            >
+              Analytics (Metrics)
+            </button>
           </div>
-
-          {activeView === 'swarm' ? <SwarmControlRoom /> : <MissionQueue workspaceId={workspace.id} />}
+{activeView === 'swarm' ? <SwarmControlRoom /> : activeView === 'queue' ? <MissionQueue workspaceId={workspace.id} /> : <ObservabilityDashboard />}
         </div>
 
         <LiveFeed />

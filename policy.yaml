@@ -1,0 +1,40 @@
+auto_approve_actions:
+  - search_past_deliverables
+
+hitl_required_actions:
+  - spawn_sub_task
+  - create_subtasks
+  - scrape_and_parse_url
+
+banned_actions:
+  - read_env_file
+  - read_dot_env_file
+
+allowed_fetch_domains:
+  - localhost
+  - 127.0.0.1
+  - mission-control
+  - mission-control.local
+  - api.mission-control.local
+
+  - equinix.com
+  - digitalrealty.com
+  - actis.com
+sandbox_rules:
+  untrusted_telegram_to_hitl: true
+
+
+tenant_isolation: true
+
+role_permissions:
+  admin:
+    - read
+    - write
+    - orchestrate
+    - approve
+  analyst:
+    - read
+    - write
+    - orchestrate
+  guest:
+    - read

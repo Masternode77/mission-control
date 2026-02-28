@@ -360,6 +360,63 @@ export function MissionQueue({ workspaceId }: MissionQueueProps) {
   );
 }
 
+
+function getTaskIntentCategory(metadata: ReturnType<typeof parseMetadata>, task: QueueTask): string {
+  const direct = String(
+    (metadata?.intent as string) ||
+      (metadata?.intent_category as string) ||
+      (metadata?.category as string) ||
+      (metadata?.intentTag as string) ||
+      (metadata?.phase_tag as string) ||
+      ''
+  ).trim().toUpperCase();
+
+  if (direct.includes('DATA_CENTER_DEAL')) return 'DATA_CENTER_DEAL';
+  if (direct.includes('MACRO_CRYPTO')) return 'MACRO_CRYPTO';
+  if (direct.includes('SYSTEM_OPS')) return 'SYSTEM_OPS';
+  if (direct.includes('GENERAL_CHIT_CHAT')) return 'GENERAL_CHIT_CHAT';
+
+  const target = (String(task.title || "") + ' ' + String(task.description || "")).toLowerCase();
+  let dc = 0, crypto = 0, ops = 0;
+  if (/(adat|adik|data\s*center|datacenter|colocation|코로케이션|rack|캡레이트|hyperscale|서버|전력|용량|capacity|site|사이트)/.test(target)) dc += 1;
+  if (/(비트코인|btc|crypto|금리|환율|유동성|macro|macro\s*economy|fed|인플레이션|채권|달러|경제|gdp|리스크)/.test(target)) crypto += 1;
+  if (/(에이전트|agent|미션\s*컨트롤|swarm|task|status|로그|모니터|build|배포|deploy|오케스트|telegram|webhook|queue|ops)/.test(target)) ops += 1;
+
+  if (dc >= crypto && dc >= ops && dc > 0) return 'DATA_CENTER_DEAL';
+  if (crypto >= dc && crypto >= ops && crypto > 0) return 'MACRO_CRYPTO';
+  if (ops >= dc && ops >= crypto && ops > 0) return 'SYSTEM_OPS';
+  return 'GENERAL_CHIT_CHAT';
+}
+
+function getIntentBadgeClass(intent: string) {
+  switch (intent) {
+    case 'DATA_CENTER_DEAL':
+      return 'bg-blue-500/20 text-blue-300 border-blue-400/40';
+    case 'MACRO_CRYPTO':
+      return 'bg-orange-500/20 text-orange-300 border-orange-400/40';
+    case 'SYSTEM_OPS':
+      return 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40';
+    default:
+      return 'bg-slate-500/20 text-slate-300 border-slate-400/40';
+  }
+}
+
+function getSquadIcons(task: QueueTask, metadata: ReturnType<typeof parseMetadata>): string[] {
+  const src = String([
+    task.assigned_agent?.name || '',
+    task.assigned_agent?.id || '',
+    String((metadata as any)?.squad || ''),
+    String((metadata as any)?.role || ''),
+    String((metadata as any)?.team || ''),
+  ].join(' ')).toLowerCase();
+
+  const icons = new Set<string>();
+  if (src.includes('dc') || src.includes('colocation') || src.includes('코로케이션') || src.includes('adat')) icons.add('🏢');
+  if (src.includes('macro') || src.includes('crypto') || src.includes('비트코인') || src.includes('금리')) icons.add('📊');
+  if (src.includes('legal') || src.includes('법') || src.includes('compliance') || src.includes('규정')) icons.add('⚖️');
+  return Array.from(icons);
+}
+
 function TaskCard({
   task,
   allTasks,
@@ -380,12 +437,15 @@ function TaskCard({
   const priorityStyles = { low: 'text-mc-text-secondary', normal: 'text-mc-accent', high: 'text-mc-accent-yellow', urgent: 'text-mc-accent-red' };
   const priorityDots = { low: 'bg-mc-text-secondary/40', normal: 'bg-mc-accent', high: 'bg-mc-accent-yellow', urgent: 'bg-mc-accent-red' };
   const metadata = parseMetadata(task.metadata);
+  const taskIntent = getTaskIntentCategory(metadata, task);
+  const taskIntentBadge = getIntentBadgeClass(taskIntent);
+  const squadIcons = getSquadIcons(task, metadata);
   const isTelegramTask = Boolean(metadata?.telegram_chat_id);
   const progress = getSubtaskProgress(task, allTasks);
   const isSubtask = Boolean(task.parent_task_id);
 
   return (
-    <div draggable onDragStart={(e) => onDragStart(e, task)} onClick={onClick} className={`group bg-mc-bg-secondary border rounded-lg cursor-pointer transition-all hover:shadow-lg hover:shadow-black/20 ${isDragging ? 'opacity-50 scale-95' : ''} ${task.is_rework ? 'border-orange-400/80 shadow-[0_0_12px_rgba(251,146,60,0.45)]' : 'border-mc-border/50 hover:border-mc-accent/40'}`}>
+    <div draggable onDragStart={(e) => onDragStart(e, task)} onClick={onClick} className={`relative group bg-mc-bg-secondary border rounded-lg cursor-pointer transition-all hover:shadow-lg hover:shadow-black/20 ${isDragging ? 'opacity-50 scale-95' : ''} ${task.is_rework ? 'border-orange-400/80 shadow-[0_0_12px_rgba(251,146,60,0.45)]' : 'border-mc-border/50 hover:border-mc-accent/40'}`}>
       <div className="flex items-center justify-center py-1.5 border-b border-mc-border/30 opacity-0 group-hover:opacity-100 transition-opacity">
         <GripVertical className="w-4 h-4 text-mc-text-secondary/50 cursor-grab" />
       </div>
@@ -397,6 +457,7 @@ function TaskCard({
             {isTelegramTask && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-400/40">✈️ Telegram</span>}
             {task.is_rework && <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300">Rework</span>}
           </div>
+          <span className={`text-[10px] px-2 py-0.5 rounded border ${taskIntentBadge}`}> {taskIntent}</span>
         </div>
 
         <div className="flex items-start justify-between gap-2 mb-3">
@@ -429,9 +490,18 @@ function TaskCard({
         )}
 
         <div className="flex items-center justify-between pt-2 border-t border-mc-border/20">
-          <div className="flex items-center gap-1.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${priorityDots[task.priority]}`} />
-            <span className={`text-xs capitalize ${priorityStyles[task.priority]}`}>{task.priority}</span>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              <div className={`w-1.5 h-1.5 rounded-full ${priorityDots[task.priority]}`} />
+              <span className={`text-xs capitalize ${priorityStyles[task.priority]}`}>{task.priority}</span>
+            </div>
+            {squadIcons.length > 0 && (
+              <div className="flex items-center gap-1">
+                {squadIcons.map((icon) => (
+                  <span key={icon} className="text-sm">{icon}</span>
+                ))}
+              </div>
+            )}
           </div>
           <span className="text-[10px] text-mc-text-secondary/60">{formatDistanceToNow(new Date(task.updated_at || task.created_at), { addSuffix: true })}</span>
         </div>

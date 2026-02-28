@@ -6,6 +6,10 @@ import { CORE_SWARM_TOOLS } from '@/lib/openclaw/skills';
 import { executeToolByName } from '@/lib/openclaw/tool-executors';
 import { sendTelegramReply, sendTelegramMessage } from '@/lib/telegram';
 import { archiveToNotion } from '@/lib/notion-archiver';
+import { createSwarmTracer } from '@/lib/tracer';
+import { classifyIntent, formatIntentForPrompt } from '@/lib/pre-router';
+import fs from 'fs';
+import path from 'path';
 
 const MAX_WAIT_MS = 600000; // 10 minutes streaming hard kill-switch
 const HITL_REVIEW_WAIT_MS = 86400000; // 24 hours (do not auto-regress HITL state)
@@ -329,6 +333,251 @@ async function bridgeDeliverableToTelegram(taskId: string, taskTitle: string, fi
   return { attempted: true, delivered: true, chunks: chunks.length };
 }
 
+
+type PolicyDecision = 'auto_approve' | 'hitl_required' | 'banned';
+
+type PolicyConfig = {
+  auto_approve_actions: string[];
+  hitl_required_actions: string[];
+  banned_actions: string[];
+  allowed_fetch_domains: string[];
+  sandbox_rules: { untrusted_telegram_to_hitl?: boolean };
+};
+
+type PolicyContext = {
+  policy: PolicyConfig;
+  isUntrustedTelegram: boolean;
+  sourceChatId: string | null;
+  resolvedBy: string;
+};
+
+const DEFAULT_POLICY: PolicyConfig = {
+  auto_approve_actions: ['search_past_deliverables', 'internal_log_read'],
+  hitl_required_actions: ['spawn_sub_task', 'create_subtasks', 'scrape_and_parse_url', 'send_telegram_reply'],
+  banned_actions: ['read_env_file', 'read_dot_env_file', 'fetch_data_from_unapproved_domain'],
+  allowed_fetch_domains: ['localhost', '127.0.0.1', 'mission-control', 'mission-control.local'],
+  sandbox_rules: { untrusted_telegram_to_hitl: true },
+};
+
+function parsePolicyYaml(raw: string): PolicyConfig {
+  const lines = String(raw || '').replace(/\r/g, '').split('\n');
+  const cfg: PolicyConfig = {
+    auto_approve_actions: [],
+    hitl_required_actions: [],
+    banned_actions: [],
+    allowed_fetch_domains: [],
+    sandbox_rules: {},
+  };
+  let current: null | 'auto_approve_actions' | 'hitl_required_actions' | 'banned_actions' | 'allowed_fetch_domains' = null;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const section = /^([a-zA-Z_][a-zA-Z0-9_]*):$/.exec(trimmed);
+    if (section) {
+      const name = section[1];
+      if (name === 'auto_approve_actions' || name === 'hitl_required_actions' || name === 'banned_actions' || name === 'allowed_fetch_domains') {
+        current = name;
+      } else {
+        current = null;
+      }
+      continue;
+    }
+    const item = /^-\s*(.+)$/.exec(trimmed);
+    if (item && current) {
+      cfg[current].push(String(item[1]).trim());
+      continue;
+    }
+    if (trimmed.startsWith('sandbox_rules:')) {
+      const hit = /untrusted_telegram_to_hitl:\s*(true|false)/i.exec(trimmed);
+      cfg.sandbox_rules = {
+        untrusted_telegram_to_hitl: hit ? String(hit[1]).toLowerCase() === 'true' : true,
+      };
+    }
+  }
+  return {
+    auto_approve_actions: cfg.auto_approve_actions.length ? cfg.auto_approve_actions : DEFAULT_POLICY.auto_approve_actions,
+    hitl_required_actions: cfg.hitl_required_actions.length ? cfg.hitl_required_actions : DEFAULT_POLICY.hitl_required_actions,
+    banned_actions: cfg.banned_actions.length ? cfg.banned_actions : DEFAULT_POLICY.banned_actions,
+    allowed_fetch_domains: cfg.allowed_fetch_domains.length ? cfg.allowed_fetch_domains : DEFAULT_POLICY.allowed_fetch_domains,
+    sandbox_rules: { untrusted_telegram_to_hitl: cfg.sandbox_rules.untrusted_telegram_to_hitl !== false },
+  };
+}
+
+function loadPolicy(): PolicyConfig {
+  const p = path.join(process.cwd(), 'policy.yaml');
+  if (!fs.existsSync(p)) return DEFAULT_POLICY;
+  try {
+    return parsePolicyYaml(fs.readFileSync(p, 'utf8'));
+  } catch {
+    return DEFAULT_POLICY;
+  }
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object') return {};
+  if (typeof value === 'string') return toRecordSafe(value);
+  return value as Record<string, unknown>;
+}
+
+function toRecordSafe(raw: string | null | undefined): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object') ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function getTaskPolicyContext(taskId: string): PolicyContext {
+  const policy = loadPolicy();
+  const row = queryOne<{ source_event: string | null; metadata: string | null }>('SELECT source_event, metadata FROM swarm_tasks WHERE task_id = ?', [taskId]);
+  const source = toRecordSafe(row?.source_event || null);
+  const metadata = toRecordSafe(row?.metadata || null);
+  const sourceMeta = toRecord(source['metadata']);
+  const sourceChatId = String(
+    source['telegram_chat_id'] ||
+    source['chat_id'] ||
+    sourceMeta['telegram_chat_id'] ||
+    sourceMeta['chatId'] ||
+    metadata['telegram_chat_id'] ||
+    ''
+  ).trim();
+  const sourceType = String(source['source'] || '').toLowerCase();
+  const isTelegram = sourceType === 'telegram' || !!sourceChatId;
+  const masterChatId = String(process.env.TELEGRAM_MASTER_CHAT_ID || '').trim();
+  const untrusted = isTelegram && (!masterChatId || (sourceChatId ? sourceChatId !== masterChatId : false));
+  return {
+    policy,
+    isUntrustedTelegram: untrusted && policy.sandbox_rules?.untrusted_telegram_to_hitl !== false,
+    sourceChatId: sourceChatId || null,
+    resolvedBy: 'policy.yaml',
+  };
+}
+
+function isAllowedDomain(url: string, allowed: string[]): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return (allowed || []).some((candidate) => {
+      const c = String(candidate || '').toLowerCase();
+      return host === c || host.endsWith('.' + c);
+    });
+  } catch {
+    return false;
+  }
+}
+
+function enforceTenantIsolationForTask(taskId: string): {ok: boolean; reason?: string; taskTenant?: string; requesterTenant?: string} {
+  try {
+    const row = queryOne<{ tenant_id: string | null; source_event: string | null; metadata: string | null }>('SELECT tenant_id, source_event, metadata FROM swarm_tasks WHERE task_id = ?', [taskId]);
+    const taskTenant = String(row?.tenant_id || 'default').trim() || 'default';
+    const source = toRecordSafe(row?.source_event || null);
+    const metadata = toRecordSafe(row?.metadata || null);
+    const sourceMeta = toRecord(source['metadata']);
+    const requesterTenant = String(
+      source['tenant_id'] ||
+      sourceMeta['tenant_id'] ||
+      metadata['tenant_id'] ||
+      process.env.REQUEST_TENANT_ID ||
+      'default'
+    ).trim() || 'default';
+    if (requesterTenant !== taskTenant) {
+      return { ok: false, reason: 'TENANT_ISOLATION_BLOCK', taskTenant, requesterTenant };
+    }
+    return { ok: true, taskTenant, requesterTenant };
+  } catch {
+    return { ok: false, reason: 'TENANT_ISOLATION_CHECK_FAILED' };
+  }
+}
+
+function classifyToolAction(toolName: string, argsRaw: unknown, ctx: PolicyContext): { decision: PolicyDecision; reason: string } {
+  const name = String(toolName || '').trim().toLowerCase();
+  const args = toRecordSafe(typeof argsRaw === 'string' ? argsRaw : JSON.stringify(argsRaw));
+  const payload = JSON.stringify(args);
+  const targetUrl = String(args['url'] || '').trim();
+
+  if (payload.includes('.env')) return { decision: 'banned', reason: 'BANNED_ACTION: .env access in args' };
+  if (name === 'scrape_and_parse_url' && targetUrl && !isAllowedDomain(targetUrl, ctx.policy.allowed_fetch_domains)) {
+    return { decision: 'banned', reason: 'BANNED_ACTION: unapproved domain fetch ' + targetUrl };
+  }
+  if (ctx.policy.banned_actions.includes(name)) return { decision: 'banned', reason: 'BANNED_ACTION: ' + name };
+
+  if (ctx.policy.hitl_required_actions.includes(name)) {
+    if (ctx.isUntrustedTelegram) {
+      return { decision: 'hitl_required', reason: 'HITL_REQUIRED: ' + name + ' from untrusted telegram (' + (ctx.sourceChatId || 'unknown') + ')' };
+    }
+    return { decision: 'hitl_required', reason: 'HITL_REQUIRED: ' + name };
+  }
+
+  if (ctx.policy.auto_approve_actions.includes(name)) {
+    return { decision: 'auto_approve', reason: 'AUTO_APPROVE: ' + name };
+  }
+
+  return { decision: 'hitl_required', reason: 'HITL_REQUIRED: default-deny unknown action' + (name ? ' ' + name : '') };
+}
+
+
+function estimateTokensFromText(text: unknown): number {
+  const raw = typeof text === 'string' ? text : String(text ?? '');
+  const normalized = raw.replace(/\s+/g, ' ').trim();
+  if (!normalized) return 0;
+  return Math.max(1, Math.ceil(normalized.length / 4));
+}
+
+function extractTotalTokensFromGatewayEvent(value: unknown, depth = 0): number | undefined {
+  if (depth > 6 || value == null) return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = extractTotalTokensFromGatewayEvent(item, depth + 1);
+      if (typeof hit === 'number' && Number.isFinite(hit)) return hit;
+    }
+    return undefined;
+  }
+  if (typeof value !== 'object') return undefined;
+  const obj = value as Record<string, unknown>;
+  const direct = extractTotalTokensFromUsage(obj);
+  if (typeof direct === 'number' && Number.isFinite(direct) && direct >= 0) return direct;
+  for (const key of Object.keys(obj)) {
+    const hit = extractTotalTokensFromGatewayEvent(obj[key], depth + 1);
+    if (typeof hit === 'number' && Number.isFinite(hit)) return hit;
+  }
+  return undefined;
+}
+
+function extractTotalTokensFromUsage(response: unknown): number | undefined {
+  const r = (response && typeof response === "object") ? (response as Record<string, unknown>) : {};
+  const usage = (r.usage && typeof r.usage === "object") ? (r.usage as Record<string, unknown>) : {};
+  const total = Number(usage.total_tokens);
+  if (Number.isFinite(total) && total >= 0) return total;
+  const prompt = Number(usage.prompt_tokens ?? usage.input_tokens ?? usage.promptTokenCount ?? usage.inputTokenCount ?? 0);
+  const completion = Number(usage.completion_tokens ?? usage.output_tokens ?? usage.candidates_token_count ?? usage.outputTokenCount ?? 0);
+  const merged = (Number.isFinite(prompt) ? prompt : 0) + (Number.isFinite(completion) ? completion : 0);
+  if (merged > 0) return merged;
+  // Some wrappers put usage in nested result payloads
+  const result = (r.result && typeof r.result === "object") ? (r.result as Record<string, unknown>) : {};
+  const nestedUsage = (result.usage && typeof result.usage === "object") ? (result.usage as Record<string, unknown>) : {};
+  const nestedTotal = Number(nestedUsage.total_tokens);
+  if (Number.isFinite(nestedTotal) && nestedTotal >= 0) return nestedTotal;
+  return undefined;
+}
+
+function enterPolicyGate(params: { taskId: string; runId: string; toolName: string; toolCallId: string; reason: string }) {
+  const now = new Date().toISOString();
+  const approvalId = 'policy-' + params.runId + '-' + params.toolCallId;
+  run("INSERT OR IGNORE INTO swarm_approvals (approval_id, task_id, gate_reason, approval_status, requested_at) VALUES (?, ?, ?, 'pending', ?)",
+    [approvalId, params.taskId, 'policy:' + params.reason, now],
+  );
+  run("UPDATE swarm_runs SET run_status='hitl_review', ended_at=?, duration_ms=?, output_summary=? WHERE run_id=?", [
+    now,
+    0,
+    'Policy gate triggered: ' + params.reason,
+    params.runId,
+  ]);
+  run("UPDATE swarm_tasks SET status='hitl_review', updated_at=? WHERE task_id=?", [now, params.taskId]);
+  logEvent(params.taskId, params.runId, '[POLICY_GATE] ' + params.toolName + ' blocked for HITL: ' + params.reason);
+}
+
+
 export async function executeSwarmRunAsync(params: {
   taskId: string;
   runId: string;
@@ -338,13 +587,20 @@ export async function executeSwarmRunAsync(params: {
   objective?: string | null;
   subPrompt: string;
 }) {
+  const preRouteIntentInput = `${params.taskTitle || ""}\n${params.objective || ""}\n${params.subPrompt || ""}`;
+  const preRouteIntent = classifyIntent(preRouteIntentInput);
+  logEvent(params.taskId, params.runId, `[PREROUTER] intent=${preRouteIntent.category} score=${preRouteIntent.score}`);
+  const preRouteSystemPrompt = formatIntentForPrompt(preRouteIntent);
+  logEvent(params.taskId, params.runId, `[PREROUTER] metadata=${preRouteSystemPrompt}`);
   const startedAtMs = Date.now();
+  const tracer = createSwarmTracer(params.taskId, params.runId);
   const client = getOpenClawClient();
 
   let finalMarkdown: string | null = null;
   let ended = false;
   let failedReason: string | null = null;
   let streamRunId: string | null = null;
+  let streamUsageTotalTokens: number | undefined = undefined;
 
   const seenToolCalls = new Set<string>();
   const pendingToolCalls: ToolCallCandidate[] = [];
@@ -359,6 +615,11 @@ export async function executeSwarmRunAsync(params: {
     if (!eventName) return;
 
     if (streamRunId && payload.runId !== streamRunId) return;
+
+    const eventUsageTokens = extractTotalTokensFromGatewayEvent(evt) ?? extractTotalTokensFromGatewayEvent(payload);
+    if (typeof eventUsageTokens === 'number' && Number.isFinite(eventUsageTokens)) {
+      streamUsageTotalTokens = eventUsageTokens;
+    }
 
     const discovered = extractToolCalls(payload);
     for (const tc of discovered) {
@@ -409,8 +670,8 @@ export async function executeSwarmRunAsync(params: {
     logEvent(params.taskId, params.runId, `[DISPATCH_DETAIL] Monica told ${params.roleId}: ${trim(params.subPrompt, 280)}`);
     logEvent(params.taskId, params.runId, `[THINKING] ${params.roleId} started execution`);
 
-    const role = queryOne<{ prompt_template_ref: string | null }>(
-      'SELECT prompt_template_ref FROM agent_roles WHERE role_id = ?',
+    const role = queryOne<{ prompt_template_ref: string | null; default_agent_id: string | null }>(
+      'SELECT prompt_template_ref, default_agent_id FROM agent_roles WHERE role_id = ?',
       [params.roleId]
     );
 
@@ -428,6 +689,9 @@ export async function executeSwarmRunAsync(params: {
     const payload = [
       role?.prompt_template_ref || '',
       '',
+      '# ROUTING',
+      preRouteSystemPrompt,
+      '',
       '# TASK',
       `Title: ${params.taskTitle}`,
       `Objective: ${params.objective || '-'}`,
@@ -443,7 +707,21 @@ export async function executeSwarmRunAsync(params: {
 
     client.on('gateway_event', onGatewayEvent);
 
+    const llmCallStartedAt = new Date().toISOString();
     let sendRes: any;
+    let sendResTotalTokens: number | undefined = undefined;
+    let usedModel = undefined as string | undefined;
+    let initialSendSuccess = false;
+    let initialSendError: unknown = null;
+    try {
+      usedModel = role?.default_agent_id
+        ? queryOne<{ model: string | null }>(
+            'SELECT model FROM agents WHERE id = ?',
+            [role.default_agent_id]
+          )?.model || undefined
+        : undefined;
+    } catch {}
+
     try {
       sendRes = await client.call('chat.send', {
         sessionKey: params.sessionKey,
@@ -451,22 +729,28 @@ export async function executeSwarmRunAsync(params: {
         idempotencyKey: `swarm-exec-${params.taskId}-${Date.now()}`,
         __timeoutMs: 86400000,
       });
-    } catch (initialSendError) {
-      const reason = initialSendError instanceof Error ? initialSendError.message : String(initialSendError);
-      const report = errorReportMarkdown(params.taskTitle, params.roleId, reason);
-      const result = failRunAndTaskSafely({
-        taskId: params.taskId,
-        runId: params.runId,
-        reason,
-        report,
-        preserveHitlReview: true,
+      sendResTotalTokens = extractTotalTokensFromUsage(sendRes);
+      initialSendSuccess = true;
+    } catch (err) {
+      initialSendSuccess = false;
+      initialSendError = err;
+      throw err;
+    } finally {
+      tracer.logSpan({
+        spanType: 'llm_call',
+        spanName: 'chat.send.initial',
+        model: usedModel || undefined,
+        success: initialSendSuccess,
+        latencyMs: Date.now() - Date.parse(llmCallStartedAt),
+        startedAt: llmCallStartedAt,
+        endedAt: new Date().toISOString(),
+        costTokens: sendResTotalTokens,
+        metadata: {
+          method: 'llm',
+          ...(initialSendError ? { error: initialSendError instanceof Error ? initialSendError.message : String(initialSendError) } : {}),
+        },
       });
-
-      logEvent(params.taskId, params.runId, `[EXECUTOR_ERROR] initial chat.send failed: ${reason}`);
-      broadcast({ type: 'task_updated', payload: { id: params.taskId, status: result.taskStatus } as any });
-      return;
     }
-
     streamRunId = String(sendRes?.runId || '');
     if (!streamRunId) {
       throw new Error('chat.send did not return runId');
@@ -482,11 +766,104 @@ export async function executeSwarmRunAsync(params: {
           throw new Error(`tool loop limit exceeded (${MAX_TOOL_LOOP})`);
         }
 
-        const toolResult = await executeToolByName(next.name, next.arguments, {
-          workspaceId: 'default',
-          parentTaskId: params.taskId,
-          requesterRoleId: params.roleId,
-        });
+        const toolStartedAt = new Date().toISOString();
+        const tenantGuard = enforceTenantIsolationForTask(params.taskId);
+        if (!tenantGuard.ok) {
+          tracer.logSpan({
+            spanType: 'tool_call',
+            spanName: next.name,
+            toolName: next.name,
+            toolArguments: next.arguments,
+            success: false,
+            latencyMs: Date.now() - Date.parse(toolStartedAt),
+            startedAt: toolStartedAt,
+            endedAt: new Date().toISOString(),
+            metadata: {
+              tool_call_id: next.id,
+              policy_decision: 'banned',
+              policy_reason: tenantGuard.reason || 'TENANT_ISOLATION_BLOCK',
+              tenant_task: tenantGuard.taskTenant,
+              tenant_requester: tenantGuard.requesterTenant,
+            },
+          });
+          throw new Error('POLICY_BLOCKED: TENANT_ISOLATION_BLOCK');
+        }
+        const policyContext = getTaskPolicyContext(params.taskId);
+        const policyDecision = classifyToolAction(next.name, next.arguments, policyContext);
+        if (policyDecision.decision === 'banned') {
+          tracer.logSpan({
+            spanType: 'tool_call',
+            spanName: next.name,
+            toolName: next.name,
+            toolArguments: next.arguments,
+            success: false,
+            latencyMs: Date.now() - Date.parse(toolStartedAt),
+            startedAt: toolStartedAt,
+            endedAt: new Date().toISOString(),
+            metadata: {
+              tool_call_id: next.id,
+              policy_decision: policyDecision.decision,
+              policy_reason: policyDecision.reason,
+            },
+          });
+          throw new Error('POLICY_BLOCKED: ' + policyDecision.reason);
+        }
+        if (policyDecision.decision === 'hitl_required') {
+          tracer.logSpan({
+            spanType: 'tool_call',
+            spanName: next.name,
+            toolName: next.name,
+            toolArguments: next.arguments,
+            success: false,
+            latencyMs: Date.now() - Date.parse(toolStartedAt),
+            startedAt: toolStartedAt,
+            endedAt: new Date().toISOString(),
+            metadata: {
+              tool_call_id: next.id,
+              policy_decision: policyDecision.decision,
+              policy_reason: policyDecision.reason,
+            },
+          });
+          enterPolicyGate({
+            taskId: params.taskId,
+            runId: params.runId,
+            toolName: next.name,
+            toolCallId: next.id,
+            reason: policyDecision.reason,
+          });
+          return;
+        }
+        let toolResult: unknown = null;
+        let toolSucceeded = false;
+        let toolError: unknown = null;
+
+        try {
+          toolResult = await executeToolByName(next.name, next.arguments, {
+            workspaceId: 'default',
+            parentTaskId: params.taskId,
+            requesterRoleId: params.roleId,
+          });
+          toolSucceeded = true;
+        } catch (err) {
+          toolError = err;
+          throw err;
+        } finally {
+          tracer.logSpan({
+            spanType: 'tool_call',
+            spanName: next.name,
+            toolName: next.name,
+            toolArguments: next.arguments,
+            success: toolSucceeded,
+            latencyMs: Date.now() - Date.parse(toolStartedAt),
+            startedAt: toolStartedAt,
+            endedAt: new Date().toISOString(),
+            costTokens: undefined,
+            metadata: {
+              tool_call_id: next.id,
+              ...(toolError ? { error: toolError instanceof Error ? toolError.message : String(toolError) } : {}),
+            },
+          });
+        }
 
         run(
           `INSERT INTO events (id, type, task_id, message, metadata, created_at)
@@ -523,7 +900,42 @@ export async function executeSwarmRunAsync(params: {
     if (failedReason) throw new Error(failedReason);
     if (!finalMarkdown) throw new Error(`timeout exceeded ${MAX_WAIT_MS}ms while waiting streaming final`);
 
+    const tokenSource = (typeof streamUsageTotalTokens === 'number' && Number.isFinite(streamUsageTotalTokens))
+      ? 'exact'
+      : 'estimated';
+    const tokenEstimated = tokenSource !== 'exact';
+    const finalizedTotalTokens = tokenEstimated
+      ? (estimateTokensFromText(payload) + estimateTokensFromText(finalMarkdown))
+      : (streamUsageTotalTokens ?? 0);
+
+    tracer.logSpan({
+      spanType: 'llm_call',
+      spanName: 'chat.send.usage.final',
+      model: usedModel || undefined,
+      success: true,
+      costTokens: finalizedTotalTokens,
+      latencyMs: Date.now() - Date.parse(llmCallStartedAt),
+      startedAt: llmCallStartedAt,
+      endedAt: new Date().toISOString(),
+      metadata: {
+        method: 'llm',
+        source: tokenEstimated ? 'estimated_from_prompt_and_final_text' : 'gateway_event_or_final_payload',
+        token_source: tokenSource,
+        token_estimated: tokenEstimated,
+        run_id: streamRunId || undefined,
+      },
+    });
+
     const cleanMarkdown = stripHandoffLeak(finalMarkdown);
+    const isMaster = isMasterReportTask(params.taskTitle);
+
+    tracer.logSpan({
+      spanType: 'synthesis',
+      spanName: params.taskTitle,
+      success: true,
+      latencyMs: Date.now() - startedAtMs,
+      metadata: { is_master: isMaster }
+    });
 
     const endedAt = new Date().toISOString();
     run(
@@ -538,7 +950,20 @@ export async function executeSwarmRunAsync(params: {
       logEvent(params.taskId, params.runId, '[DELIVERABLE_SAVED] Report finalized and saved.');
     }
 
-    const isMaster = isMasterReportTask(params.taskTitle);
+    if (!isMaster) {
+      tracer.logSpan({
+        spanType: 'hitl_gate',
+        spanName: 'execution_to_hitl_review',
+        approver: 'pending',
+        success: true,
+        startedAt: endedAt,
+        endedAt: new Date().toISOString(),
+        metadata: {
+          reason: 'execution_completed_needs_review',
+        },
+      });
+    }
+
     const nextTaskStatus = isMaster ? 'completed' : 'hitl_review';
 
     run(`UPDATE swarm_tasks SET status = ?, updated_at = ? WHERE task_id = ?`, [nextTaskStatus, endedAt, params.taskId]);
@@ -568,6 +993,18 @@ export async function executeSwarmRunAsync(params: {
     broadcast({ type: 'task_updated', payload: { id: params.taskId, status: nextTaskStatus } as any });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
+
+    tracer.logSpan({
+      spanType: 'synthesis',
+      spanName: params.taskTitle,
+      success: false,
+      latencyMs: Date.now() - startedAtMs,
+      metadata: {
+        error: reason,
+        phase: 'execution_error',
+      },
+    });
+
     const report = errorReportMarkdown(params.taskTitle, params.roleId, reason);
     const result = failRunAndTaskSafely({
       taskId: params.taskId,

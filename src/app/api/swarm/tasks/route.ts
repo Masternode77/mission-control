@@ -8,6 +8,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 type SwarmTaskRow = {
+  tenant_id: string | null;
   task_id: string;
   title: string;
   objective: string | null;
@@ -29,6 +30,13 @@ type SwarmTaskRow = {
   source_event?: string | null;
 };
 
+function resolveRequesterTenantId(request: NextRequest, body?: any): string {
+  const headerTenant = String(request.headers.get('x-tenant-id') || '').trim();
+  const queryTenant = String(request.nextUrl.searchParams.get('tenant_id') || '').trim();
+  const bodyTenant = String(body?.tenant_id || '').trim();
+  return headerTenant || queryTenant || bodyTenant || 'default';
+}
+
 function mapPriority(priority: string): 'low' | 'normal' | 'high' | 'urgent' {
   const p = (priority || '').toUpperCase();
   if (p === 'P0' || p === 'URGENT') return 'urgent';
@@ -40,12 +48,15 @@ function mapPriority(priority: string): 'low' | 'normal' | 'high' | 'urgent' {
 export async function GET(request: NextRequest) {
   try {
     const workspaceId = request.nextUrl.searchParams.get('workspace_id') || 'default';
+    const requesterTenantId = resolveRequesterTenantId(request);
+    const targetTaskId = request.nextUrl.searchParams.get('task_id');
     const hasMetadataColumn = queryAll<{ name: string }>("PRAGMA table_info(swarm_tasks)").some((c) => c.name === 'metadata');
 
     const rows = queryAll<SwarmTaskRow>(
       `
       SELECT
         st.task_id,
+        st.tenant_id,
         st.title,
         st.objective,
         st.status,
@@ -70,10 +81,19 @@ export async function GET(request: NextRequest) {
       `
     );
 
+    const tenantFilteredRows = rows.filter((row) => String(row.tenant_id || 'default') === requesterTenantId);
+
+    if (targetTaskId) {
+      const existsAny = rows.find((row) => row.task_id === targetTaskId);
+      if (existsAny && String(existsAny.tenant_id || 'default') !== requesterTenantId) {
+        return NextResponse.json({ error: 'Forbidden: tenant isolation' }, { status: 403 });
+      }
+    }
+
     const filteredRows =
       workspaceId && workspaceId !== 'default' && workspaceId !== 'all'
-        ? rows.filter((row) => row.ws === workspaceId)
-        : rows;
+        ? tenantFilteredRows.filter((row) => row.ws === workspaceId)
+        : tenantFilteredRows;
 
     const tasks = filteredRows.map((row) => {
       const normalizedStatus: SwarmPipelineStatus = normalizeSwarmPipelineStatus(row.status);
@@ -89,6 +109,7 @@ export async function GET(request: NextRequest) {
       }
       return {
         id: row.task_id,
+        tenant_id: row.tenant_id || 'default',
         title: row.title,
         description: row.objective || undefined,
         status: normalizedStatus,
@@ -125,6 +146,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    const requesterTenantId = resolveRequesterTenantId(request, body);
     const title = String(body?.title || '').trim();
     if (!title) return NextResponse.json({ error: 'title is required' }, { status: 400 });
 
@@ -164,13 +186,14 @@ export async function POST(request: NextRequest) {
     }
 
     run(
-      `INSERT INTO swarm_tasks (task_id, parent_task_id, ws, title, objective, owner_role_id, priority, status, execution_order, context_payload, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [taskId, parentTaskId, ws, title, objective, ownerRoleId, priority, status, executionOrder, contextPayload, ownerRoleId, now, now]
+      `INSERT INTO swarm_tasks (task_id, parent_task_id, ws, title, objective, owner_role_id, priority, status, execution_order, context_payload, tenant_id, created_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [taskId, parentTaskId, ws, title, objective, ownerRoleId, priority, status, executionOrder, contextPayload, requesterTenantId, ownerRoleId, now, now]
     );
 
     const newTask = {
       id: taskId,
+      tenant_id: requesterTenantId,
       title,
       description: objective || undefined,
       status,

@@ -4,6 +4,7 @@ import { broadcast } from '@/lib/events';
 import { queryOne, queryAll, run } from '@/lib/db';
 import { normalizeSwarmPipelineStatus } from '@/lib/swarm-status';
 import { canTriggerSynthesis, igniteTaskOrchestration } from '@/lib/swarm-ignite';
+import { sendTaskStatusWebhooks } from '@/lib/webhook-notifier';
 
 export const dynamic = 'force-dynamic';
 
@@ -253,6 +254,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const objective = typeof body.description === 'string' ? body.description : (typeof body.objective === 'string' ? body.objective : undefined);
     const ownerRoleId = typeof body.owner_role_id === 'string' ? body.owner_role_id : undefined;
 
+    const before = queryOne<{ title: string; status: string }>('SELECT title, status FROM swarm_tasks WHERE task_id = ?', [id]);
+
     run(
       `UPDATE swarm_tasks
        SET status = ?,
@@ -271,6 +274,17 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     if (rawStatus === 'failed') {
       failRunsForTerminalTask(id, now);
+    }
+
+
+    if (nextStatus === 'completed' || nextStatus === 'hitl_review') {
+      void sendTaskStatusWebhooks({
+        taskId: id,
+        title: title || before?.title || id,
+        status: nextStatus,
+        previousStatus: before?.status,
+        source: 'task_patch',
+      });
     }
 
     broadcast({ type: 'task_updated', payload: { id, status: nextStatus } as any });

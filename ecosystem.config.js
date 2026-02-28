@@ -1,23 +1,32 @@
 module.exports = {
   apps: [
     {
-      name: 'mission-control-3005',
+      name: 'mission-control',
       cwd: '/Users/josh/.openclaw/workspace/mission-control',
       script: 'npm',
-      args: 'run start',
-      interpreter: 'none',
-      exec_mode: 'fork',
-      instances: 1,
-      autorestart: true,
-      watch: false,
+      args: 'run start -- -p 3005',
       env: {
-        OPENCLAW_GATEWAY_URL: 'ws://127.0.0.1:18789',
-        OPENCLAW_GATEWAY_TOKEN: 'b3d65d6864b3b134b5e627314c85ba0480fa14f3e2c54542',
-        NODE_ENV: 'production'
+        NODE_ENV: 'production',
+        OPENCLAW_GATEWAY_URL: process.env.OPENCLAW_GATEWAY_URL || 'ws://127.0.0.1:18789',
+        OPENCLAW_GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN || '',
       },
-      output: '/Users/josh/.openclaw/workspace/mission-control/logs/pm2-out.log',
-      error: '/Users/josh/.openclaw/workspace/mission-control/logs/pm2-error.log',
-      log_date_format: 'YYYY-MM-DD HH:mm:ss',
-    }
-  ]
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 2000,
+    },
+    {
+      name: 'mission-control-canary',
+      cwd: '/Users/josh/.openclaw/workspace/mission-control',
+      script: 'npm',
+      args: 'run start -- -p 3006',
+      env: {
+        NODE_ENV: 'production',
+        OPENCLAW_GATEWAY_URL: process.env.OPENCLAW_GATEWAY_URL || 'ws://127.0.0.1:18789',
+        OPENCLAW_GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN || '',
+      },
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 2000,
+    },
+  ],
 };

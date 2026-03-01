@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { broadcast } from '@/lib/events';
 import { queryOne, run } from '@/lib/db';
 import { executeSwarmRunAsync } from '@/lib/swarm-executor';
+import { sendTaskStatusWebhooks } from '@/lib/webhook-notifier';
 
 export const dynamic = 'force-dynamic';
 
@@ -99,6 +100,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       },
     });
     broadcast({ type: 'task_updated', payload: { id: task.task_id, status: 'in_execution' } as any });
+
+    void sendTaskStatusWebhooks({
+      taskId: task.task_id,
+      title: task.title,
+      status: 'in_execution',
+      approvalId: id,
+      reviewerNote: note,
+      source: 'hitl_reject',
+    });
 
     void executeSwarmRunAsync({
       taskId: task.task_id,

@@ -1,0 +1,33 @@
+# Progress Log
+Run: 886cabf3-4d11-4625-859f-2e4cf63e5bd5
+Task: Telegram/Slack webhook notification module + HITL approve/reject + realtime sync + reject-note validation
+Started: 2026-03-01T04:41:00+09:00
+
+## Codebase Patterns
+- Swarm state transitions are API-route driven under `src/app/api/swarm/**`; realtime board updates depend on explicit `broadcast({ type: 'task_updated' | 'event_logged' })` calls after DB writes.
+- HITL approval lifecycle is centered on `swarm_approvals` + `swarm_tasks` + `swarm_runs`; reject flow re-dispatches by creating a new `swarm_runs` row and invoking `executeSwarmRunAsync`.
+- Notification integrations are best added as side-effect helpers in `src/lib/*` and called with `void` in routes to avoid blocking core task state transitions.
+
+---
+
+## 2026-03-01T04:45:00+09:00 - story-1: Monolithic fallback story
+- Implemented webhook fan-out integration for Telegram/Slack notifications on key status transitions.
+- Added webhook dispatch calls for:
+  - task PATCH transitions to `completed` / `hitl_review`
+  - simulate-complete route when HITL review is created
+  - HITL approve route when task becomes completed
+  - HITL reject route when task is re-dispatched to execution
+- Added realtime board sync improvement in approve route via `task_updated` broadcast on completion.
+- Kept server-side reject-note validation enforced (`note.trim()` required; 400 when missing).
+- Added test coverage for webhook module behavior (configured vs non-configured URLs).
+- Updated `.env.example` with optional notification webhook config keys.
+- Files changed:
+  - `.env.example`
+  - `src/app/api/swarm/tasks/[id]/route.ts`
+  - `src/app/api/swarm/tasks/[id]/simulate-complete/route.ts`
+  - `src/app/api/swarm/approvals/[id]/approve/route.ts`
+  - `src/app/api/swarm/approvals/[id]/reject/route.ts`
+  - `tests/unit/webhook-notifier.test.ts`
+
+**Learnings:** Approve path previously logged HITL completion but did not emit `task_updated`; adding it improves immediate board consistency for clients relying on SSE task deltas.
+---

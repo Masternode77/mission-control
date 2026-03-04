@@ -11,10 +11,17 @@ import { classifyIntent, formatIntentForPrompt } from '@/lib/pre-router';
 import fs from 'fs';
 import path from 'path';
 
-const MAX_WAIT_MS = 600000; // 10 minutes streaming hard kill-switch
+const BASE_MAX_WAIT_MS = 30000; // verification mode: 30s
+const ESCALATED_MAX_WAIT_MS = 45000; // verification mode: 45s
 const HITL_REVIEW_WAIT_MS = 86400000; // 24 hours (do not auto-regress HITL state)
 const TELEGRAM_CHUNK_SIZE = 4000;
 const MAX_TOOL_LOOP = 6;
+
+function resolveStreamingWaitMs(taskTitle: string, subPrompt: string): number {
+  const hay = `${taskTitle || ''} ${subPrompt || ''}`.toLowerCase();
+  const heavyHints = ['market intelligence', 'p1', 'macro', 'crawl', 'rag', 'site selection', 'csp', 'rework'];
+  return heavyHints.some((k) => hay.includes(k)) ? ESCALATED_MAX_WAIT_MS : BASE_MAX_WAIT_MS;
+}
 
 function resolvePublicBaseUrl() {
   const base = String(process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3005').trim();
@@ -758,7 +765,9 @@ export async function executeSwarmRunAsync(params: {
 
     logEvent(params.taskId, params.runId, `[THINKING] waiting for streamed final response runId=${streamRunId}`);
 
-    while (!ended && Date.now() - startedAtMs < MAX_WAIT_MS) {
+    const effectiveMaxWaitMs = resolveStreamingWaitMs(params.taskTitle, params.subPrompt);
+
+    while (!ended && Date.now() - startedAtMs < effectiveMaxWaitMs) {
       if (pendingToolCalls.length > 0) {
         const next = pendingToolCalls.shift()!;
         toolLoopCount += 1;
@@ -898,7 +907,7 @@ export async function executeSwarmRunAsync(params: {
     }
 
     if (failedReason) throw new Error(failedReason);
-    if (!finalMarkdown) throw new Error(`timeout exceeded ${MAX_WAIT_MS}ms while waiting streaming final`);
+    if (!finalMarkdown) throw new Error(`timeout exceeded ${effectiveMaxWaitMs}ms while waiting streaming final`);
 
     const tokenSource = (typeof streamUsageTotalTokens === 'number' && Number.isFinite(streamUsageTotalTokens))
       ? 'exact'
@@ -1004,6 +1013,47 @@ export async function executeSwarmRunAsync(params: {
         phase: 'execution_error',
       },
     });
+
+    const isStreamingTimeout = /timeout exceeded .*waiting streaming final/i.test(reason);
+    if (isStreamingTimeout) {
+      const now = new Date().toISOString();
+      const partial = stripHandoffLeak(finalMarkdown || '') || [
+        '# Partial Deliverable (Timeout Fallback)',
+        '',
+        `- task_id: ${params.taskId}`,
+        `- run_id: ${params.runId}`,
+        `- reason: ${reason}`,
+        '',
+        '## Note',
+        'Streaming final timed out. Sending partial package to HITL for human review instead of failing hard.',
+      ].join('\n');
+
+      run(
+        `UPDATE swarm_runs
+         SET run_status = 'completed', ended_at = ?, duration_ms = ?, error_message = ?, output_summary = ?
+         WHERE run_id = ?`,
+        [now, Date.now() - startedAtMs, reason, partial, params.runId]
+      );
+
+      run(`UPDATE swarm_tasks SET status = 'hitl_review', updated_at = ? WHERE task_id = ?`, [now, params.taskId]);
+      run(
+        `INSERT OR IGNORE INTO swarm_approvals (approval_id, task_id, gate_reason, approval_status, requested_at)
+         VALUES (?, ?, ?, 'pending', ?)`,
+        [`approval-${params.runId}`, params.taskId, 'timeout_fallback_to_hitl', now]
+      );
+
+      logEvent(params.taskId, params.runId, `[TIMEOUT_FALLBACK] ${reason}`);
+      logEvent(params.taskId, params.runId, '[TIMEOUT_FALLBACK] partial deliverable moved to HITL_REVIEW.');
+
+      try {
+        await bridgeDeliverableToTelegram(params.taskId, params.taskTitle, partial);
+      } catch (bridgeError) {
+        logEvent(params.taskId, params.runId, `[TIMEOUT_FALLBACK] Telegram bridge failed: ${String(bridgeError)}`);
+      }
+
+      broadcast({ type: 'task_updated', payload: { id: params.taskId, status: 'hitl_review' } as any });
+      return;
+    }
 
     const report = errorReportMarkdown(params.taskTitle, params.roleId, reason);
     const result = failRunAndTaskSafely({

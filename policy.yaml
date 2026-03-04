@@ -1,14 +1,41 @@
+# Normalized Policy (Action IDs)
+# Source of truth:
+# - mission-control/src/lib/openclaw/skills.ts
+# - mission-control/src/lib/swarm-executor.ts
+#
+# Autonomous Charter v1 (2026-03-02)
+# - Research & Drafting: auto-approve
+# - Transmission (external/report delivery): HITL required
+# - Money movement / contract sign / core credential changes: banned
+
 auto_approve_actions:
   - search_past_deliverables
+  - internal_log_read
+  - summarize_market_intel
+  - macro_analysis
+  - draft_deal_pitch
+  - draft_investment_thesis
+  - draft_client_brief
 
 hitl_required_actions:
   - spawn_sub_task
   - create_subtasks
   - scrape_and_parse_url
+  - send_telegram_reply
+  - write_file
+  - send_external_email
+  - send_official_report
+  - publish_client_update
 
 banned_actions:
   - read_env_file
   - read_dot_env_file
+  - fetch_data_from_unapproved_domain
+  - execute_buy_order
+  - execute_sell_order
+  - sign_contract
+  - modify_core_secrets
+  - modify_env_vars
 
 allowed_fetch_domains:
   - localhost
@@ -16,13 +43,17 @@ allowed_fetch_domains:
   - mission-control
   - mission-control.local
   - api.mission-control.local
-
   - equinix.com
   - digitalrealty.com
   - actis.com
+  - aws.amazon.com
+  - azure.microsoft.com
+  - cloud.google.com
+  - kepco.co.kr
+  - cmegroup.com
+
 sandbox_rules:
   untrusted_telegram_to_hitl: true
-
 
 tenant_isolation: true
 

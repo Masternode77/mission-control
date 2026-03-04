@@ -1,17 +1,22 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, ArrowRight, Folder, Users, CheckSquare, Trash2, AlertTriangle } from 'lucide-react';
+import { Plus, ArrowRight, Folder, Users, CheckSquare, Trash2, AlertTriangle, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 import type { WorkspaceStats } from '@/lib/types';
 
 export function WorkspaceDashboard() {
   const [workspaces, setWorkspaces] = useState<WorkspaceStats[]>([]);
+  const [reports, setReports] = useState<any[]>([]);
+  const [targetTopic, setTargetTopic] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [generateStatus, setGenerateStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
 
   useEffect(() => {
     loadWorkspaces();
+    loadReports();
   }, []);
 
   const loadWorkspaces = async () => {
@@ -25,6 +30,52 @@ export function WorkspaceDashboard() {
       console.error('Failed to load workspaces:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadReports = async () => {
+    try {
+      const res = await fetch('/api/reports');
+      if (res.ok) {
+        const data = await res.json();
+        setReports(data);
+      }
+    } catch (error) {
+      console.error('Failed to load reports:', error);
+    }
+  };
+
+  const retryReport = async (id: string, step: 'send' | 'index' | 'pdf' | 'all') => {
+    await fetch(`/api/reports/${id}/retry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ step }),
+    });
+    await loadReports();
+  };
+
+  const generateResearchReport = async () => {
+    if (!targetTopic.trim()) return;
+    setGenerating(true);
+    setGenerateStatus('in_execution');
+    try {
+      const res = await fetch('/api/reports/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: targetTopic.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok && data?.ok) {
+        setGenerateStatus('completed');
+        setTargetTopic('');
+        await loadReports();
+      } else {
+        setGenerateStatus(`failed: ${data?.error || 'unknown'}`);
+      }
+    } catch (e: any) {
+      setGenerateStatus(`failed: ${String(e?.message || e)}`);
+    } finally {
+      setGenerating(false);
     }
   };
 
@@ -68,6 +119,71 @@ export function WorkspaceDashboard() {
             Select a workspace to view its mission queue and agents
           </p>
         </div>
+
+        <section className="mb-10 bg-mc-bg-secondary border border-mc-border rounded-xl p-4">
+          <div className="flex flex-col gap-3 mb-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Recent Reports (3-way sync)</h3>
+              <button onClick={loadReports} className="text-xs px-2 py-1 border border-mc-border rounded hover:border-mc-accent">Refresh</button>
+            </div>
+            <div className="flex flex-col md:flex-row gap-2 items-stretch md:items-center">
+              <input
+                value={targetTopic}
+                onChange={(e) => setTargetTopic(e.target.value)}
+                placeholder="Target Topic/URL (e.g., Meta APAC DC Expansion)"
+                className="flex-1 bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm"
+              />
+              <button
+                onClick={generateResearchReport}
+                disabled={generating || !targetTopic.trim()}
+                className="px-3 py-2 rounded bg-cyan-500/20 text-cyan-200 text-sm disabled:opacity-50"
+              >
+                {generating ? 'Generating... (in_execution)' : 'Generate Research Report'}
+              </button>
+            </div>
+            {generateStatus && <div className="text-xs text-mc-text-secondary">Status: {generateStatus}</div>}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-mc-text-secondary border-b border-mc-border">
+                  <th className="py-2 pr-3">Title</th>
+                  <th className="py-2 pr-3">Deliverables</th>
+                  <th className="py-2 pr-3">Distribution</th>
+                  <th className="py-2 pr-3">Index Status</th>
+                  <th className="py-2 pr-3">PDF Export</th>
+                  <th className="py-2">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reports.map((r) => (
+                  <tr key={r.id} className="border-b border-mc-border/40">
+                    <td className="py-2 pr-3">{r.title}</td>
+                    <td className="py-2 pr-3 text-xs break-all">{r.file_path}</td>
+                    <td className="py-2 pr-3">{r.telegram_status}</td>
+                    <td className="py-2 pr-3">{r.index_status}</td>
+                    <td className="py-2 pr-3">{r.pdf_status || 'pending'}</td>
+                    <td className="py-2">
+                      {(r.telegram_status === 'failed' || r.index_status === 'failed' || r.pdf_status === 'failed') ? (
+                        <div className="flex gap-2 flex-wrap">
+                          <button onClick={() => retryReport(r.id, 'send')} className="text-xs px-2 py-1 rounded bg-amber-500/20">Retry Send</button>
+                          <button onClick={() => retryReport(r.id, 'index')} className="text-xs px-2 py-1 rounded bg-cyan-500/20">Retry Index</button>
+                          <button onClick={() => retryReport(r.id, 'pdf')} className="text-xs px-2 py-1 rounded bg-violet-500/20">Retry PDF</button>
+                          <button onClick={() => retryReport(r.id, 'all')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 flex items-center gap-1"><RefreshCw className="w-3 h-3"/>Retry All</button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-mc-text-secondary">-</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {reports.length === 0 && (
+                  <tr><td className="py-3 text-mc-text-secondary" colSpan={6}>No reports yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
 
         {workspaces.length === 0 ? (
           <div className="text-center py-16">

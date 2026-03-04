@@ -28,5 +28,18 @@ module.exports = {
       max_restarts: 10,
       restart_delay: 2000,
     },
+    {
+      name: 'mission-control-telegram-listener',
+      cwd: '/Users/josh/.openclaw/workspace/mission-control',
+      script: 'npm',
+      args: 'run telegram:listener',
+      env: {
+        NODE_ENV: 'production',
+        TELEGRAM_MASTER_CHAT_ID: process.env.TELEGRAM_MASTER_CHAT_ID || '85990941',
+      },
+      autorestart: true,
+      max_restarts: 20,
+      restart_delay: 2000,
+    },
   ],
 };

@@ -1,0 +1,24 @@
+# Progress Log
+Run: 15b51bf9-bee0-467b-89c4-735f797f88b8
+Task: [SYSTEM_OPS] 웹앱 MVP 배포 자동화 | Objective: venture smoke route
+Started: 2026-03-06T01:00:00+09:00
+
+## Codebase Patterns
+- Keep orchestration heuristic logic in `src/lib/swarm-routing.ts` so API routes stay Next.js-compatible (route handlers cannot export arbitrary helpers) while unit tests can target pure routing behavior.
+- Venture routing prompts should explicitly require parseable `STORIES_JSON` output plus plaintext fallback guidance to protect downstream automation from planner format failures.
+
+---
+
+## 2026-03-06T01:03:00+09:00 - story-1: Monolithic fallback story
+- Implemented venture deployment-automation routing prompt hardening for one-pass `plan→build→verify→deploy` flows.
+- Added explicit sub-prompt requirements for checklist artifacts, `/workspace/venture` smoke validation evidence, strict `STORIES_JSON` fenced output, and graceful plaintext fallback.
+- Refactored routing heuristics into `src/lib/swarm-routing.ts` and kept route handler behavior intact.
+- Added unit tests covering venture-route prompt requirements and macro routing fallback.
+- Attempted branch sync with `git pull --rebase --autostash origin feature/webapp-mvp-deploy-automation-venture-smoke-route`, but remote branch ref does not exist.
+- Files changed:
+  - `src/lib/swarm-routing.ts`
+  - `src/app/api/swarm/tasks/[id]/orchestrate/route.ts`
+  - `tests/unit/orchestrate-route.test.ts`
+
+**Learnings:** Next.js App Router route modules reject extra exports during typecheck; extracting reusable decision logic into `src/lib/*` avoids generated route type errors and improves testability.
+---

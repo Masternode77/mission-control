@@ -284,4 +284,27 @@ CREATE INDEX IF NOT EXISTS idx_swarm_runs_status ON swarm_runs(run_status);
 CREATE INDEX IF NOT EXISTS idx_swarm_handoffs_task ON swarm_handoffs(task_id);
 CREATE INDEX IF NOT EXISTS idx_swarm_approvals_status ON swarm_approvals(approval_status);
 CREATE INDEX IF NOT EXISTS idx_swarm_moc_task ON swarm_moc_links(task_id);
+
+-- Report runs table (3-way sync SSOT)
+CREATE TABLE IF NOT EXISTS report_runs (
+  id TEXT PRIMARY KEY,
+  task_id TEXT,
+  workspace_id TEXT DEFAULT 'default',
+  title TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'created' CHECK (status IN ('created','sent','indexed','failed')),
+  telegram_chat_id TEXT,
+  telegram_message_id TEXT,
+  telegram_status TEXT DEFAULT 'pending' CHECK (telegram_status IN ('pending','sent','failed')),
+  index_status TEXT DEFAULT 'pending' CHECK (index_status IN ('pending','indexed','failed')),
+  pdf_path TEXT,
+  pdf_status TEXT DEFAULT 'pending' CHECK (pdf_status IN ('pending','exported','failed')),
+  error_message TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY(task_id) REFERENCES swarm_tasks(task_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_report_runs_created ON report_runs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_report_runs_status ON report_runs(status);
 `;

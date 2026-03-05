@@ -4,6 +4,7 @@ import { broadcast } from '@/lib/events';
 import { queryOne, run } from '@/lib/db';
 import { buildHitlTelegramSummary, sendTelegramMessage } from '@/lib/telegram';
 import { getRevisionInjection } from '@/lib/revision-injection';
+import { sendTaskStatusWebhooks } from '@/lib/webhook-notifier';
 
 export const dynamic = 'force-dynamic';
 
@@ -82,6 +83,14 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
 
     await sendTelegramMessage({
       text: buildHitlTelegramSummary(id, task.title, finalDraft || `Task ${id} moved to HITL_REVIEW`),
+    });
+
+    void sendTaskStatusWebhooks({
+      taskId: id,
+      title: task.title,
+      status: 'hitl_review',
+      approvalId,
+      source: 'simulate_complete',
     });
 
     broadcast({ type: 'event_logged', payload: { taskId: id, sessionId: approvalId, summary: 'hitl_pending' } });

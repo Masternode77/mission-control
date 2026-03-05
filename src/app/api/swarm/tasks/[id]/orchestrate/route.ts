@@ -5,36 +5,10 @@ import { broadcast } from '@/lib/events';
 import { queryOne, run } from '@/lib/db';
 import { executeSwarmRunAsync } from '@/lib/swarm-executor';
 
-type RouteDecision = {
-  target_agent_id: string;
-  sub_prompt: string;
-};
+import { heuristicRoute } from '@/lib/swarm-routing';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
-
-function heuristicRoute(title: string, objective: string | null): RouteDecision {
-  const text = `${title}\n${objective || ''}`.toLowerCase();
-
-  if (/cpi|fomc|inflation|macro|금리|환율|거시/.test(text)) {
-    return {
-      target_agent_id: 'shared_planner_architect',
-      sub_prompt: `Analyze this macro task with scenario framework and execution checklist.\nTask: ${title}\nObjective: ${objective || '-'}`,
-    };
-  }
-
-  if (/pricing|competitor|supply|pipeline|rfp/.test(text)) {
-    return {
-      target_agent_id: 'dc_deep_researcher',
-      sub_prompt: `Produce competitor/supply intelligence and decision-grade summary.\nTask: ${title}\nObjective: ${objective || '-'}`,
-    };
-  }
-
-  return {
-    target_agent_id: 'dc_strategy_analyst',
-    sub_prompt: `Create strategy brief with risks, options, and next actions.\nTask: ${title}\nObjective: ${objective || '-'}`,
-  };
-}
 
 export async function POST(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {

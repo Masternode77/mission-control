@@ -744,8 +744,46 @@ ${block}` : block;
         console.log(`[Migration 018] injected verifier prompt into ${roleId}`);
       }
     }
+  },
+  {
+    id: '019',
+    name: 'add_report_runs_ssot_table',
+    up: (db) => {
+      console.log('[Migration 019] Adding report_runs table for 3-way sync SSOT...');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS report_runs (
+          id TEXT PRIMARY KEY,
+          task_id TEXT,
+          workspace_id TEXT DEFAULT 'default',
+          title TEXT NOT NULL,
+          file_path TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'created' CHECK (status IN ('created','sent','indexed','failed')),
+          telegram_chat_id TEXT,
+          telegram_message_id TEXT,
+          telegram_status TEXT DEFAULT 'pending' CHECK (telegram_status IN ('pending','sent','failed')),
+          index_status TEXT DEFAULT 'pending' CHECK (index_status IN ('pending','indexed','failed')),
+          pdf_path TEXT,
+          pdf_status TEXT DEFAULT 'pending' CHECK (pdf_status IN ('pending','exported','failed')),
+          error_message TEXT,
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now')),
+          FOREIGN KEY(task_id) REFERENCES swarm_tasks(task_id)
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_report_runs_created ON report_runs(created_at DESC)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_report_runs_status ON report_runs(status)`);
+    }
+  },
+  {
+    id: '020',
+    name: 'add_report_runs_pdf_columns',
+    up: (db) => {
+      console.log('[Migration 020] Adding pdf_path/pdf_status to report_runs...');
+      const info = db.prepare("PRAGMA table_info(report_runs)").all() as { name: string }[];
+      if (!info.some((c) => c.name === 'pdf_path')) db.exec("ALTER TABLE report_runs ADD COLUMN pdf_path TEXT");
+      if (!info.some((c) => c.name === 'pdf_status')) db.exec("ALTER TABLE report_runs ADD COLUMN pdf_status TEXT DEFAULT 'pending'");
+    }
   }
-
 
 ];
 
